@@ -12,6 +12,8 @@ import (
 	"github.com/teal-bauer/chatto-cli/config"
 )
 
+var Version = "dev"
+
 var (
 	flagProfile  string
 	flagInstance string
@@ -20,9 +22,10 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "chatto",
-	Short: "Command-line client for Chatto",
-	Long:  "chatto-cli lets you interact with a Chatto instance from the terminal.",
+	Use:     "chatto",
+	Short:   "Command-line client for Chatto",
+	Long:    "chatto-cli lets you interact with a Chatto instance from the terminal.",
+	Version: Version,
 }
 
 // Execute runs the root command.
