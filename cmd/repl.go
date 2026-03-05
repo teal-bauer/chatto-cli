@@ -71,6 +71,9 @@ func runREPL(cmd *cobra.Command, args []string) error {
 			continue
 		}
 		if err := state.dispatch(line); err != nil {
+			if errors.Is(err, errExit) {
+				break
+			}
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		}
 	}
@@ -102,7 +105,6 @@ func (s *replState) dispatch(line string) error {
 
 	switch verb {
 	case "exit", "quit", "q":
-		fmt.Println("Bye.")
 		return errExit
 
 	case "help", "?":
@@ -535,16 +537,18 @@ func (s *replState) printHelp() {
 	fmt.Println(dim("When a default room is set, any unrecognized input is sent as a message."))
 }
 
-// splitLine splits a line on whitespace, respecting single-quoted strings.
+// splitLine splits a line on whitespace, respecting single- and double-quoted strings.
 func splitLine(line string) []string {
 	var parts []string
 	var current strings.Builder
+	var quoteChar rune
 	inQuote := false
 	for _, r := range line {
 		switch {
-		case r == '\'' && !inQuote:
+		case (r == '\'' || r == '"') && !inQuote:
 			inQuote = true
-		case r == '\'' && inQuote:
+			quoteChar = r
+		case inQuote && r == quoteChar:
 			inQuote = false
 		case (r == ' ' || r == '\t') && !inQuote:
 			if current.Len() > 0 {

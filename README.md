@@ -50,7 +50,7 @@ chatto send myspace general hello world
 
 ### `messages` flags
 
-- `-n N` — number of messages to fetch (default 20)
+- `-n N` / `--limit N` — number of messages to fetch (default 20)
 - `--since <event-id>` — show messages after this event ID
 
 ### `watch` flags
@@ -77,6 +77,8 @@ chatto:myspace:#general > exit
 ```
 
 Within the REPL, when a space and room are set with `use`, typing anything not recognized as a command sends it as a message.
+
+Names containing spaces can be quoted with single or double quotes: `use "Chatto Community" general`.
 
 ## Configuration
 
