@@ -134,11 +134,9 @@ func (c *Client) GetRooms(spaceID string) ([]Room, error) {
 			Rooms []Room `json:"rooms"`
 		} `json:"space"`
 		Me *struct {
-			RoomMemberships []struct {
-				Room struct {
-					ID string `json:"id"`
-				} `json:"room"`
-			} `json:"roomMemberships"`
+			Rooms []struct {
+				ID string `json:"id"`
+			} `json:"rooms"`
 		} `json:"me"`
 	}
 	err := c.Execute(`
@@ -147,7 +145,7 @@ func (c *Client) GetRooms(spaceID string) ([]Room, error) {
 				rooms { id name archived }
 			}
 			me {
-				roomMemberships(spaceId: $spaceId) { room { id } }
+				rooms(spaceId: $spaceId) { id }
 			}
 		}`, map[string]any{"spaceId": spaceID}, &data)
 	if err != nil {
@@ -158,8 +156,8 @@ func (c *Client) GetRooms(spaceID string) ([]Room, error) {
 	}
 	joinedIDs := map[string]bool{}
 	if data.Me != nil {
-		for _, m := range data.Me.RoomMemberships {
-			joinedIDs[m.Room.ID] = true
+		for _, r := range data.Me.Rooms {
+			joinedIDs[r.ID] = true
 		}
 	}
 	var rooms []Room
@@ -254,46 +252,34 @@ func (c *Client) PostMessage(spaceID, roomID, body string) (*SpaceEvent, error) 
 
 // JoinRoom joins a room.
 func (c *Client) JoinRoom(spaceID, roomID string) error {
-	var data struct {
-		JoinRoom bool `json:"joinRoom"`
-	}
 	return c.Execute(`
-		mutation JoinRoom($spaceId: ID!, $roomId: ID!) {
-			joinRoom(spaceId: $spaceId, roomId: $roomId)
-		}`, map[string]any{"spaceId": spaceID, "roomId": roomID}, &data)
+		mutation JoinRoom($input: JoinRoomInput!) {
+			joinRoom(input: $input)
+		}`, map[string]any{"input": map[string]any{"spaceId": spaceID, "roomId": roomID}}, nil)
 }
 
 // LeaveRoom leaves a room.
 func (c *Client) LeaveRoom(spaceID, roomID string) error {
-	var data struct {
-		LeaveRoom bool `json:"leaveRoom"`
-	}
 	return c.Execute(`
-		mutation LeaveRoom($spaceId: ID!, $roomId: ID!) {
-			leaveRoom(spaceId: $spaceId, roomId: $roomId)
-		}`, map[string]any{"spaceId": spaceID, "roomId": roomID}, &data)
+		mutation LeaveRoom($input: LeaveRoomInput!) {
+			leaveRoom(input: $input)
+		}`, map[string]any{"input": map[string]any{"spaceId": spaceID, "roomId": roomID}}, nil)
 }
 
 // JoinSpace joins a space.
 func (c *Client) JoinSpace(spaceID string) error {
-	var data struct {
-		JoinSpace bool `json:"joinSpace"`
-	}
 	return c.Execute(`
-		mutation JoinSpace($spaceId: ID!) {
-			joinSpace(spaceId: $spaceId)
-		}`, map[string]any{"spaceId": spaceID}, &data)
+		mutation JoinSpace($input: JoinSpaceInput!) {
+			joinSpace(input: $input)
+		}`, map[string]any{"input": map[string]any{"spaceId": spaceID}}, nil)
 }
 
 // LeaveSpace leaves a space.
 func (c *Client) LeaveSpace(spaceID string) error {
-	var data struct {
-		LeaveSpace bool `json:"leaveSpace"`
-	}
 	return c.Execute(`
-		mutation LeaveSpace($spaceId: ID!) {
-			leaveSpace(spaceId: $spaceId)
-		}`, map[string]any{"spaceId": spaceID}, &data)
+		mutation LeaveSpace($input: LeaveSpaceInput!) {
+			leaveSpace(input: $input)
+		}`, map[string]any{"input": map[string]any{"spaceId": spaceID}}, nil)
 }
 
 // SearchMembers searches for members in a space.
