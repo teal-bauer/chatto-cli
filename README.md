@@ -1,8 +1,13 @@
 # chatto-cli
 
-Command-line client for [Chatto](https://chatto.run) — a self-hosted team chat platform.
+```sh
+chatto rooms
+chatto messages general
+chatto send general "hello world"
+chatto watch
+```
 
-Connects to the Chatto GraphQL API to browse spaces and rooms, read and send messages, and stream live events via WebSocket subscription.
+Command-line client for [Chatto](https://chatto.run), a self-hosted team chat platform. Browse rooms, read and send messages, and stream live events from the terminal. Talks to the Chatto ConnectRPC API and the realtime protobuf WebSocket.
 
 ## Install
 
@@ -10,7 +15,7 @@ Connects to the Chatto GraphQL API to browse spaces and rooms, read and send mes
 go install github.com/teal-bauer/chatto-cli@latest
 ```
 
-Or clone and build:
+Or build from source:
 
 ```sh
 git clone https://github.com/teal-bauer/chatto-cli
@@ -18,90 +23,85 @@ cd chatto-cli
 go build -o chatto .
 ```
 
+`go install` produces a binary named `chatto-cli`. The examples below use `chatto`; rename or alias it.
+
 ## Quick start
 
 ```sh
-chatto login                    # authenticate and save session
-chatto spaces                   # list spaces you have access to
-chatto rooms myspace            # list rooms in a space
-chatto messages myspace general # show recent messages
-chatto watch myspace            # stream live events (Ctrl+C to stop)
-chatto send myspace general hello world
+chatto login                    # authenticate, save a profile
+chatto rooms                    # list rooms on the server
+chatto messages general         # recent messages in #general
+chatto send general "hello"     # post a message
+chatto watch                    # stream live events (Ctrl+C to stop)
 ```
+
+Rooms are matched by ID, name, or `#name`.
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `login [profile]` | Authenticate and store session |
-| `logout [profile]` | Remove stored session |
+| `login [profile]` | Authenticate and store a token |
+| `logout [profile]` | Remove a stored profile |
 | `profiles` | List saved profiles |
-| `spaces` | List spaces |
-| `join-space <space>` | Join a space |
-| `leave-space <space>` | Leave a space |
-| `rooms <space>` | List rooms in a space |
-| `join <space> <room>` | Join a room |
-| `leave <space> <room>` | Leave a room |
-| `messages <space> <room>` | Show recent messages |
-| `send <space> <room> <text…>` | Send a message |
-| `watch <space>` | Stream live events |
-| `me` | Show current user |
+| `me` | Show the current user |
+| `rooms [--all]` | List joined rooms, or all visible rooms with `--all` |
+| `join <room>` | Join a room |
+| `leave <room>` | Leave a room |
+| `messages <room>` | Show recent messages |
+| `send <room> <text…>` | Send a message |
+| `watch` | Stream live events from the server |
 | `repl` | Interactive shell |
 
 ### `messages` flags
 
-- `-n N` / `--limit N` — number of messages to fetch (default 20)
-- `--since <event-id>` — show messages after this event ID
+- `-n N` / `--limit N`: number of messages to fetch (default 20)
+- `--before <cursor>` / `--after <cursor>`: page through history using the opaque cursors printed by a previous page
 
 ### `watch` flags
 
-- `--room <name>` — filter events to one room
-- `--history N` — show last N messages before streaming
+- `--room <id|name>`: filter events to one room
+- `--history N`: show the last N messages from `--room` before streaming (ignored with `--json`)
 
 ### Global flags
 
-- `--json` — output as JSON (machine-readable)
-- `--debug` — print raw server JSON alongside rendered output
-- `--profile <name>` — use a specific config profile
-- `--instance <url>` — override instance URL
+- `--json`: machine-readable JSON output
+- `--debug`: print the raw protobuf JSON alongside rendered output
+- `--profile <name>`: use a specific config profile
+- `--instance <url>`: override the instance URL
 
 ## Interactive shell (`repl`)
 
 ```
 chatto repl
-chatto:myspace:#general > messages 30
-chatto:myspace:#general > send hello from the repl
-chatto:myspace:#general > watch
-chatto:myspace:#general > unwatch
-chatto:myspace:#general > exit
+chatto > use general
+chatto:#general > messages 30
+chatto:#general > send hello from the repl
+chatto:#general > watch
+chatto:#general > unwatch
+chatto:#general > exit
 ```
 
-Within the REPL, when a space and room are set with `use`, typing anything not recognized as a command sends it as a message.
-
-Names containing spaces can be quoted with single or double quotes: `use "Chatto Community" general`.
+`use <room>` sets the current room. Room names with spaces can be quoted: `use "off topic"`.
 
 ## Configuration
 
-Sessions are stored in `~/.config/chatto/config.toml`:
+Profiles live in `~/.config/chatto/config.toml`:
 
 ```toml
 default_profile = "default"
 
 [profiles.default]
 instance = "https://chat.example.com"
-session  = "..."
+token    = "..."
 login    = "you"
-
-[profiles.work]
-instance = "https://chat.work.example.com"
-session  = "..."
 ```
 
-Run `chatto login --profile work` to add a second profile.
+`chatto login --profile work` adds a second profile. The `token` is a bearer credential; keep it out of shared configs. `--instance`, `CHATTO_INSTANCE`, and `CHATTO_TOKEN` override the stored profile.
 
-## Output format
+## Output
 
-Messages are rendered in an IRC-like format:
+Messages render in an IRC-like format:
 
 ```
 [20:15] [#general] <Alice> hey everyone
@@ -109,8 +109,8 @@ Messages are rendered in an IRC-like format:
          ↩ Alice: "hey everyone"
 ```
 
-Thread context is fetched on demand and cached. Video attachments are rendered using their processed URL once transcoding completes.
+Reply and thread context is fetched on demand and cached. Video attachments render with their processed URL once transcoding finishes.
 
 ## License
 
-AGPL-3.0 — see [LICENSE](LICENSE).
+[AGPL-3.0-or-later](LICENSE)
