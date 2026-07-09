@@ -243,16 +243,17 @@ func renderAttachment(a *apiv1.MessageAttachment, instance string) string {
 }
 
 // printMsg prints a message line with proper multi-line continuation indent.
-// tsRaw is the bracketed timestamp, roomName is the plain room label (empty
-// to omit), thread is the thread label (empty for non-thread messages), nick
-// is the plain nick. body may contain newlines. context lines are printed
-// after the body, dimmed, then reactions.
+// tsRaw is the bracketed timestamp, roomName is the room display label already
+// including any "#" prefix for channels (empty to omit), thread is the thread
+// label (empty for non-thread messages), nick is the plain nick. body may
+// contain newlines. context lines are printed after the body, dimmed, then
+// reactions.
 func printMsg(tsRaw, roomName, thread, nick, body string, context, reactions []string) {
 	roomPart := ""
 	roomVW := 0
 	if roomName != "" {
-		roomPart = " " + dim("[#"+roomName+"]")
-		roomVW = 2 + len(roomName) + 2 // " [#" + name + "]"
+		roomPart = " " + dim("["+roomName+"]")
+		roomVW = 1 + 1 + len(roomName) + 1 // " [" + name + "]"
 	}
 	threadPart := ""
 	threadVW := 0
@@ -282,7 +283,7 @@ func printMsg(tsRaw, roomName, thread, nick, body string, context, reactions []s
 func printStatus(tsRaw, roomName, msg string) {
 	roomPart := ""
 	if roomName != "" {
-		roomPart = " " + dim("[#"+roomName+"]")
+		roomPart = " " + dim("["+roomName+"]")
 	}
 	fmt.Printf("%s%s %s\n", dim(tsRaw), roomPart, dim(msg))
 }
