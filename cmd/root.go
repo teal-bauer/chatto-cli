@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -8,6 +9,9 @@ import (
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
+
 	"github.com/teal-bauer/chatto-cli/api"
 	"github.com/teal-bauer/chatto-cli/config"
 )
@@ -39,7 +43,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVarP(&flagProfile, "profile", "p", "", "config profile to use")
 	rootCmd.PersistentFlags().StringVarP(&flagInstance, "instance", "i", "", "override instance URL")
 	rootCmd.PersistentFlags().BoolVar(&flagJSON, "json", false, "output as JSON")
-	rootCmd.PersistentFlags().BoolVar(&flagDebug, "debug", false, "print compact JSON alongside rendered output")
+	rootCmd.PersistentFlags().BoolVar(&flagDebug, "debug", false, "print protobuf JSON alongside rendered output")
 }
 
 // clientFromFlags builds an API client from the global flags + config.
@@ -48,27 +52,49 @@ func clientFromFlags() (*api.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	if prof.Session == "" {
-		return nil, fmt.Errorf("no session token in profile; run `chatto login` first")
+	if prof.Token == "" && prof.Session == "" {
+		return nil, fmt.Errorf("no credentials in profile; run `chatto login` first")
 	}
-	return api.New(prof.Instance, prof.Session), nil
+	return api.New(prof.Instance, prof.Token, prof.Session), nil
 }
 
-// resolveSpace resolves a space ID-or-name using the client.
-func resolveSpace(c *api.Client, idOrName string) (string, error) {
-	return c.ResolveSpaceID(idOrName)
+// resolveRoom resolves a room ID, exact name, or "#name" against the rooms
+// visible to the current user.
+func resolveRoom(ctx context.Context, c *api.Client, ref string) (string, error) {
+	return c.ResolveRoomID(ctx, ref)
 }
 
-// resolveRoom resolves a room ID-or-name within a resolved spaceID.
-func resolveRoom(c *api.Client, spaceID, idOrName string) (string, error) {
-	return c.ResolveRoomID(spaceID, idOrName)
-}
-
-// printJSON marshals v as pretty JSON to stdout.
+// printJSON marshals v as pretty JSON to stdout. Use for plain Go values
+// (config profiles etc); for protobuf messages use printProtoJSON /
+// printProtoJSONList instead, since proto oneof fields don't marshal
+// meaningfully via encoding/json.
 func printJSON(v any) {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	_ = enc.Encode(v)
+}
+
+// printProtoJSON marshals a single protobuf message as JSON to stdout.
+func printProtoJSON(msg proto.Message) {
+	b, err := protojson.MarshalOptions{Multiline: true, Indent: "  "}.Marshal(msg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warn: marshaling JSON: %v\n", err)
+		return
+	}
+	fmt.Println(string(b))
+}
+
+// printProtoJSONList marshals a slice of protobuf messages as a JSON array.
+func printProtoJSONList[T proto.Message](items []T) {
+	raws := make([]json.RawMessage, len(items))
+	for i, it := range items {
+		b, err := protojson.Marshal(it)
+		if err != nil {
+			b = []byte("null")
+		}
+		raws[i] = b
+	}
+	printJSON(raws)
 }
 
 // tw returns a new tab-separated tabwriter for aligned column output.

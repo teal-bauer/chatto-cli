@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 )
@@ -12,8 +13,33 @@ import (
 // Profile holds connection settings for one chatto server.
 type Profile struct {
 	Instance string `toml:"instance"`
-	Session  string `toml:"session"`
-	Login    string `toml:"login,omitempty"`
+	// Token is the bearer token returned by POST /auth/login. It is the
+	// primary auth mechanism against /api/connect and /api/realtime.
+	Token string `toml:"token,omitempty"`
+	// Session is the chatto_session cookie value, kept as a fallback auth
+	// mechanism alongside Token.
+	Session string `toml:"session,omitempty"`
+	Login   string `toml:"login,omitempty"`
+}
+
+// ConnectURL returns the ConnectRPC base URL derived from this profile's
+// instance (no trailing slash).
+func (p *Profile) ConnectURL() string {
+	return strings.TrimRight(p.Instance, "/") + "/api/connect"
+}
+
+// RealtimeURL returns the realtime WebSocket URL derived from this profile's
+// instance, converting an http(s) scheme to ws(s).
+func (p *Profile) RealtimeURL() string {
+	instance := strings.TrimRight(p.Instance, "/")
+	switch {
+	case strings.HasPrefix(instance, "https://"):
+		return "wss://" + instance[len("https://"):] + "/api/realtime"
+	case strings.HasPrefix(instance, "http://"):
+		return "ws://" + instance[len("http://"):] + "/api/realtime"
+	default:
+		return "wss://" + instance + "/api/realtime"
+	}
 }
 
 // Config is the top-level config file structure.
@@ -84,7 +110,7 @@ func GetProfile(profileName, instanceOverride string) (*Profile, string, error) 
 			}
 			return p, "env", nil
 		}
-		return nil, "", fmt.Errorf("no profile configured; run `chatto login` first or set CHATTO_INSTANCE and CHATTO_SESSION")
+		return nil, "", fmt.Errorf("no profile configured; run `chatto login` first or set CHATTO_INSTANCE and CHATTO_TOKEN (or CHATTO_SESSION)")
 	}
 
 	p, ok := cfg.Profiles[name]
@@ -99,11 +125,12 @@ func GetProfile(profileName, instanceOverride string) (*Profile, string, error) 
 
 func profileFromEnv() *Profile {
 	instance := os.Getenv("CHATTO_INSTANCE")
+	token := os.Getenv("CHATTO_TOKEN")
 	session := os.Getenv("CHATTO_SESSION")
-	if instance == "" || session == "" {
+	if instance == "" || (token == "" && session == "") {
 		return nil
 	}
-	return &Profile{Instance: instance, Session: session}
+	return &Profile{Instance: instance, Token: token, Session: session}
 }
 
 // SetProfile saves or updates a profile and optionally makes it the default.

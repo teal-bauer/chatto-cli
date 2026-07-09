@@ -2,8 +2,12 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
+
+	apiv1 "github.com/teal-bauer/chatto-cli/internal/pb/chatto/api/v1"
+
 	"github.com/teal-bauer/chatto-cli/config"
 )
 
@@ -11,26 +15,28 @@ var meCmd = &cobra.Command{
 	Use:   "me",
 	Short: "Show the current authenticated user",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx := cmd.Context()
 		c, err := clientFromFlags()
 		if err != nil {
 			return err
 		}
-		me, err := c.Me()
+		viewer, err := c.GetViewer(ctx)
 		if err != nil {
 			return err
 		}
-		if me == nil {
+		if viewer == nil {
 			return fmt.Errorf("not authenticated")
 		}
 		if flagJSON {
-			printJSON(me)
+			printProtoJSON(viewer)
 			return nil
 		}
+		profile := viewer.GetProfile()
 		w := tw()
-		fmt.Fprintf(w, "Login:\t%s\n", me.Login)
-		fmt.Fprintf(w, "Display name:\t%s\n", me.DisplayName)
-		fmt.Fprintf(w, "ID:\t%s\n", dim(me.ID))
-		fmt.Fprintf(w, "Presence:\t%s\n", me.PresenceStatus)
+		fmt.Fprintf(w, "Login:\t%s\n", profile.GetLogin())
+		fmt.Fprintf(w, "Display name:\t%s\n", profile.GetDisplayName())
+		fmt.Fprintf(w, "ID:\t%s\n", dim(profile.GetId()))
+		fmt.Fprintf(w, "Presence:\t%s\n", presenceLabel(profile.GetPresenceStatus()))
 		w.Flush()
 		return nil
 	},
@@ -73,4 +79,9 @@ func init() {
 
 func loadConfig() (*config.Config, error) {
 	return config.Load()
+}
+
+// presenceLabel renders a PresenceStatus as a lowercase word, e.g. "online".
+func presenceLabel(s apiv1.PresenceStatus) string {
+	return strings.ToLower(strings.TrimPrefix(s.String(), "PRESENCE_STATUS_"))
 }

@@ -1,14 +1,15 @@
 package cmd
 
 import (
-	"errors"
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
+
 	"github.com/teal-bauer/chatto-cli/api"
 	"github.com/teal-bauer/chatto-cli/config"
 )
@@ -19,7 +20,7 @@ var replCmd = &cobra.Command{
 	Use:   "repl",
 	Short: "Start an interactive chatto shell",
 	Long: `Starts an interactive shell where you can run chatto commands
-without the 'chatto' prefix. Supports setting a default space/room context.
+without the 'chatto' prefix. Supports setting a default room context.
 
 Type 'help' for available commands, 'exit' or Ctrl+D to quit.`,
 	RunE: runREPL,
@@ -31,15 +32,14 @@ func init() {
 
 // replState holds the interactive session state.
 type replState struct {
-	client       *api.Client
-	profile      string
-	instance     string
-	defaultSpace string // ID
-	defaultRoom  string // ID
-	spaceName    string // human-readable
-	roomName     string // human-readable
-	watchCancel  context.CancelFunc
-	cache        *EventCache
+	ctx         context.Context
+	client      *api.Client
+	profile     string
+	instance    string
+	defaultRoom string // ID
+	roomName    string // human-readable
+	watchCancel context.CancelFunc
+	renderer    *eventRenderer
 }
 
 func runREPL(cmd *cobra.Command, args []string) error {
@@ -48,12 +48,14 @@ func runREPL(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	client := api.New(prof.Instance, prof.Session)
+	ctx := cmd.Context()
+	client := api.New(prof.Instance, prof.Token, prof.Session)
 	state := &replState{
+		ctx:      ctx,
 		client:   client,
 		profile:  name,
 		instance: prof.Instance,
-		cache:    NewEventCache(client),
+		renderer: newEventRenderer(ctx, client, nil),
 	}
 
 	fmt.Printf("chatto shell — %s (profile: %s)\n", prof.Instance, name)
@@ -85,14 +87,10 @@ func runREPL(cmd *cobra.Command, args []string) error {
 }
 
 func (s *replState) prompt() string {
-	parts := []string{"chatto"}
-	if s.spaceName != "" {
-		parts = append(parts, s.spaceName)
-	}
 	if s.roomName != "" {
-		parts = append(parts, "#"+s.roomName)
+		return cyan("chatto:#"+s.roomName) + " > "
 	}
-	return cyan(strings.Join(parts, ":")) + " > "
+	return cyan("chatto") + " > "
 }
 
 func (s *replState) dispatch(line string) error {
@@ -113,11 +111,8 @@ func (s *replState) dispatch(line string) error {
 	case "profile":
 		return s.cmdProfile(rest)
 
-	case "spaces", "ls":
-		return s.cmdSpaces()
-
-	case "rooms":
-		return s.cmdRooms(rest)
+	case "rooms", "ls":
+		return s.cmdRooms()
 
 	case "use":
 		return s.cmdUse(rest)
@@ -144,9 +139,9 @@ func (s *replState) dispatch(line string) error {
 		return s.cmdMe()
 
 	default:
-		// If a default room is set, treat input as a message to send
-		if s.defaultSpace != "" && s.defaultRoom != "" {
-			return s.sendMessage(s.defaultSpace, s.defaultRoom, line)
+		// If a default room is set, treat input as a message to send.
+		if s.defaultRoom != "" {
+			return s.sendMessage(s.defaultRoom, line)
 		}
 		fmt.Printf("Unknown command: %q. Type 'help' for help.\n", verb)
 	}
@@ -155,7 +150,6 @@ func (s *replState) dispatch(line string) error {
 
 func (s *replState) cmdProfile(args []string) error {
 	if len(args) == 0 {
-		// Show current
 		fmt.Printf("Profile: %s\nInstance: %s\n", s.profile, s.instance)
 		return nil
 	}
@@ -168,52 +162,18 @@ func (s *replState) cmdProfile(args []string) error {
 	if err != nil {
 		return err
 	}
-	s.client = api.New(prof.Instance, prof.Session)
+	s.client = api.New(prof.Instance, prof.Token, prof.Session)
+	s.renderer = newEventRenderer(s.ctx, s.client, nil)
 	s.profile = name
 	s.instance = prof.Instance
-	s.defaultSpace = ""
 	s.defaultRoom = ""
-	s.spaceName = ""
 	s.roomName = ""
 	fmt.Printf("Switched to profile %q (%s)\n", name, prof.Instance)
 	return nil
 }
 
-func (s *replState) cmdSpaces() error {
-	spaces, err := s.client.GetSpaces()
-	if err != nil {
-		return err
-	}
-	if len(spaces) == 0 {
-		fmt.Println("No spaces.")
-		return nil
-	}
-	w := tw()
-	fmt.Fprintln(w, bold("NAME")+"\t"+bold("ID")+"\t"+bold("MEMBER"))
-	for _, sp := range spaces {
-		member := ""
-		if sp.ViewerIsMember {
-			member = green("✓")
-		}
-		fmt.Fprintf(w, "%s\t%s\t%s\n", sp.Name, dim(sp.ID), member)
-	}
-	w.Flush()
-	return nil
-}
-
-func (s *replState) cmdRooms(args []string) error {
-	spaceID := s.defaultSpace
-	if len(args) > 0 {
-		var err error
-		spaceID, err = s.client.ResolveSpaceID(args[0])
-		if err != nil {
-			return err
-		}
-	}
-	if spaceID == "" {
-		return fmt.Errorf("no space set; use 'use <space>' first or pass a space argument")
-	}
-	rooms, err := s.client.GetRooms(spaceID)
+func (s *replState) cmdRooms() error {
+	rooms, err := s.client.ListRooms(s.ctx)
 	if err != nil {
 		return err
 	}
@@ -223,12 +183,13 @@ func (s *replState) cmdRooms(args []string) error {
 	}
 	w := tw()
 	fmt.Fprintln(w, bold("ROOM")+"\t"+bold("ID")+"\t"+bold("JOINED"))
-	for _, r := range rooms {
+	for _, rws := range rooms {
+		room := rws.GetRoom()
 		joined := ""
-		if r.Joined {
+		if rws.GetViewerState().GetIsMember() {
 			joined = green("✓")
 		}
-		fmt.Fprintf(w, "#%s\t%s\t%s\n", r.Name, dim(r.ID), joined)
+		fmt.Fprintf(w, "%s\t%s\t%s\n", roomLabel(room), dim(room.GetId()), joined)
 	}
 	w.Flush()
 	return nil
@@ -237,105 +198,56 @@ func (s *replState) cmdRooms(args []string) error {
 func (s *replState) cmdUse(args []string) error {
 	switch len(args) {
 	case 0:
-		if s.spaceName != "" {
-			fmt.Printf("Space: %s (%s)\n", s.spaceName, s.defaultSpace)
-		}
 		if s.roomName != "" {
-			fmt.Printf("Room:  #%s (%s)\n", s.roomName, s.defaultRoom)
-		}
-		if s.spaceName == "" && s.roomName == "" {
-			fmt.Println("No default space/room set.")
+			fmt.Printf("Room: #%s (%s)\n", s.roomName, s.defaultRoom)
+		} else {
+			fmt.Println("No default room set.")
 		}
 	case 1:
-		spaceID, err := s.client.ResolveSpaceID(args[0])
+		roomID, err := s.client.ResolveRoomID(s.ctx, args[0])
 		if err != nil {
 			return err
 		}
-		s.defaultSpace = spaceID
-		s.spaceName = args[0]
-		s.defaultRoom = ""
-		s.roomName = ""
-		fmt.Printf("Using space %s\n", args[0])
-	case 2:
-		spaceID, err := s.client.ResolveSpaceID(args[0])
-		if err != nil {
-			return err
-		}
-		roomID, err := s.client.ResolveRoomID(spaceID, args[1])
-		if err != nil {
-			return err
-		}
-		s.defaultSpace = spaceID
-		s.spaceName = args[0]
 		s.defaultRoom = roomID
-		s.roomName = strings.TrimPrefix(args[1], "#")
-		fmt.Printf("Using %s / #%s\n", args[0], s.roomName)
+		s.roomName = strings.TrimPrefix(args[0], "#")
+		fmt.Printf("Using #%s\n", s.roomName)
+	default:
+		return fmt.Errorf("usage: use [room]")
 	}
 	return nil
 }
 
 func (s *replState) cmdJoin(args []string) error {
-	switch len(args) {
-	case 0:
-		return fmt.Errorf("usage: join <space> [room]")
-	case 1:
-		spaceID, err := s.client.ResolveSpaceID(args[0])
-		if err != nil {
-			return err
-		}
-		if err := s.client.JoinSpace(spaceID); err != nil {
-			return err
-		}
-		fmt.Printf("Joined space %s\n", args[0])
-	default:
-		spaceID, err := s.client.ResolveSpaceID(args[0])
-		if err != nil {
-			return err
-		}
-		roomID, err := s.client.ResolveRoomID(spaceID, args[1])
-		if err != nil {
-			return err
-		}
-		if err := s.client.JoinRoom(spaceID, roomID); err != nil {
-			return err
-		}
-		fmt.Printf("Joined #%s\n", args[1])
+	if len(args) == 0 {
+		return fmt.Errorf("usage: join <room>")
 	}
+	roomID, err := s.client.ResolveRoomID(s.ctx, args[0])
+	if err != nil {
+		return err
+	}
+	if _, err := s.client.JoinRoom(s.ctx, roomID); err != nil {
+		return err
+	}
+	fmt.Printf("Joined %s\n", args[0])
 	return nil
 }
 
 func (s *replState) cmdLeave(args []string) error {
-	switch len(args) {
-	case 0:
-		return fmt.Errorf("usage: leave <space> [room]")
-	case 1:
-		spaceID, err := s.client.ResolveSpaceID(args[0])
-		if err != nil {
-			return err
-		}
-		if err := s.client.LeaveSpace(spaceID); err != nil {
-			return err
-		}
-		fmt.Printf("Left space %s\n", args[0])
-	default:
-		spaceID, err := s.client.ResolveSpaceID(args[0])
-		if err != nil {
-			return err
-		}
-		roomID, err := s.client.ResolveRoomID(spaceID, args[1])
-		if err != nil {
-			return err
-		}
-		if err := s.client.LeaveRoom(spaceID, roomID); err != nil {
-			return err
-		}
-		fmt.Printf("Left #%s\n", args[1])
+	if len(args) == 0 {
+		return fmt.Errorf("usage: leave <room>")
 	}
+	roomID, err := s.client.ResolveRoomID(s.ctx, args[0])
+	if err != nil {
+		return err
+	}
+	if _, err := s.client.LeaveRoom(s.ctx, roomID); err != nil {
+		return leaveRoomErr(err)
+	}
+	fmt.Printf("Left %s\n", args[0])
 	return nil
 }
 
 func (s *replState) cmdMessages(args []string) error {
-	spaceID := s.defaultSpace
 	roomID := s.defaultRoom
 	limit := 20
 
@@ -346,82 +258,52 @@ func (s *replState) cmdMessages(args []string) error {
 		// could be a number (limit) or a room name
 		if n := parseInt(args[0]); n > 0 {
 			limit = n
-		} else if s.defaultSpace != "" {
+		} else {
 			var err error
-			roomID, err = s.client.ResolveRoomID(s.defaultSpace, args[0])
+			roomID, err = s.client.ResolveRoomID(s.ctx, args[0])
 			if err != nil {
 				return err
 			}
-		} else {
-			return fmt.Errorf("usage: messages [space] [room] [limit]")
 		}
-	case 2:
+	default:
 		var err error
-		spaceID, err = s.client.ResolveSpaceID(args[0])
+		roomID, err = s.client.ResolveRoomID(s.ctx, args[0])
 		if err != nil {
 			return err
 		}
-		roomID, err = s.client.ResolveRoomID(spaceID, args[1])
-		if err != nil {
-			return err
-		}
-	case 3:
-		var err error
-		spaceID, err = s.client.ResolveSpaceID(args[0])
-		if err != nil {
-			return err
-		}
-		roomID, err = s.client.ResolveRoomID(spaceID, args[1])
-		if err != nil {
-			return err
-		}
-		if n := parseInt(args[2]); n > 0 {
+		if n := parseInt(args[1]); n > 0 {
 			limit = n
 		}
 	}
 
-	if spaceID == "" || roomID == "" {
-		return fmt.Errorf("no space/room context; use 'use <space> <room>' first")
+	if roomID == "" {
+		return fmt.Errorf("no room context; use 'use <room>' first")
 	}
 
-	events, err := s.client.GetRoomEvents(spaceID, roomID, limit)
+	page, err := s.client.GetRoomEvents(s.ctx, roomID, int32(limit), "", "")
 	if err != nil {
 		return err
 	}
-	s.cache.StoreEvents(events)
-	printEvents(events, s.client.Instance(), nil, s.cache)
+	for _, ev := range page.GetEvents() {
+		s.renderer.renderTimelineEvent(roomID, ev)
+	}
 	return nil
 }
 
 func (s *replState) cmdSend(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: send [space room] <message...>")
+		return fmt.Errorf("usage: send [room] <message...>")
 	}
 
-	spaceID := s.defaultSpace
 	roomID := s.defaultRoom
 	var msgArgs []string
 
-	if spaceID == "" {
-		if len(args) < 3 {
-			return fmt.Errorf("no default space/room; usage: send <space> <room> <message>")
-		}
-		var err error
-		spaceID, err = s.client.ResolveSpaceID(args[0])
-		if err != nil {
-			return err
-		}
-		roomID, err = s.client.ResolveRoomID(spaceID, args[1])
-		if err != nil {
-			return err
-		}
-		msgArgs = args[2:]
-	} else if roomID == "" {
+	if roomID == "" {
 		if len(args) < 2 {
 			return fmt.Errorf("no default room; usage: send <room> <message>")
 		}
 		var err error
-		roomID, err = s.client.ResolveRoomID(spaceID, args[0])
+		roomID, err = s.client.ResolveRoomID(s.ctx, args[0])
 		if err != nil {
 			return err
 		}
@@ -430,15 +312,15 @@ func (s *replState) cmdSend(args []string) error {
 		msgArgs = args
 	}
 
-	return s.sendMessage(spaceID, roomID, strings.Join(msgArgs, " "))
+	return s.sendMessage(roomID, strings.Join(msgArgs, " "))
 }
 
-func (s *replState) sendMessage(spaceID, roomID, body string) error {
-	ev, err := s.client.PostMessage(spaceID, roomID, body)
+func (s *replState) sendMessage(roomID, body string) error {
+	msg, err := s.client.CreateMessage(s.ctx, roomID, body, "", "")
 	if err != nil {
 		return err
 	}
-	fmt.Printf("%s\n", dim("✓ sent "+ev.ID))
+	fmt.Printf("%s\n", dim("✓ sent "+msg.GetId()))
 	return nil
 }
 
@@ -448,37 +330,56 @@ func (s *replState) cmdWatch(args []string) error {
 		return nil
 	}
 
-	spaceID := s.defaultSpace
+	filterRoom := s.defaultRoom
 	if len(args) > 0 {
 		var err error
-		spaceID, err = s.client.ResolveSpaceID(args[0])
+		filterRoom, err = s.client.ResolveRoomID(s.ctx, args[0])
 		if err != nil {
 			return err
 		}
 	}
-	if spaceID == "" {
-		return fmt.Errorf("no space set; use 'use <space>' or pass a space argument")
-	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(s.ctx)
 	s.watchCancel = cancel
 
-	ch, err := s.client.Watch(ctx, spaceID)
+	ch, err := s.client.Watch(ctx)
 	if err != nil {
 		cancel()
 		s.watchCancel = nil
 		return err
 	}
 
-	fmt.Printf("%s\n", dim("Watching space "+spaceID+" in background. Use 'unwatch' to stop."))
+	label := "the server"
+	if filterRoom != "" {
+		label = "room " + filterRoom
+	}
+	fmt.Printf("%s\n", dim("Watching "+label+" in background. Use 'unwatch' to stop."))
 	go func() {
-		for ev := range ch {
-			if ev.Err != nil {
-				fmt.Fprintf(os.Stderr, "\nwatch: %v\n", ev.Err)
+		// Whatever ends the channel -- ctx cancellation via unwatch, or a
+		// terminal error from Watch -- clear watchCancel so a subsequent
+		// 'watch' isn't stuck behind a dead watcher forever saying "Already
+		// watching."
+		defer func() {
+			cancel()
+			s.watchCancel = nil
+		}()
+		var terminalErr error
+		for wev := range ch {
+			if wev.Err != nil {
+				terminalErr = wev.Err
+				fmt.Fprintf(os.Stderr, "\nwatch: %v\n", wev.Err)
+				continue
+			}
+			roomID := envelopeRoomID(wev.Event.Envelope)
+			if filterRoom != "" && roomID != "" && roomID != filterRoom {
 				continue
 			}
 			fmt.Print("\n")
-			printEvents([]api.SpaceEvent{ev.SpaceEvent}, s.client.Instance(), nil, s.cache)
+			s.renderer.renderHydrated(wev.Event)
+			fmt.Print(s.prompt())
+		}
+		if terminalErr != nil {
+			fmt.Fprintf(os.Stderr, "\nwatch: stream stopped (%v); use 'watch' to restart\n", terminalErr)
 			fmt.Print(s.prompt())
 		}
 	}()
@@ -497,32 +398,32 @@ func (s *replState) cmdUnwatch() error {
 }
 
 func (s *replState) cmdMe() error {
-	me, err := s.client.Me()
+	viewer, err := s.client.GetViewer(s.ctx)
 	if err != nil {
 		return err
 	}
-	if me == nil {
+	if viewer == nil {
 		return fmt.Errorf("not authenticated")
 	}
+	profile := viewer.GetProfile()
 	w := tw()
-	fmt.Fprintf(w, "Login:\t%s\n", me.Login)
-	fmt.Fprintf(w, "Display name:\t%s\n", me.DisplayName)
-	fmt.Fprintf(w, "ID:\t%s\n", dim(me.ID))
-	fmt.Fprintf(w, "Presence:\t%s\n", me.PresenceStatus)
+	fmt.Fprintf(w, "Login:\t%s\n", profile.GetLogin())
+	fmt.Fprintf(w, "Display name:\t%s\n", profile.GetDisplayName())
+	fmt.Fprintf(w, "ID:\t%s\n", dim(profile.GetId()))
+	fmt.Fprintf(w, "Presence:\t%s\n", presenceLabel(profile.GetPresenceStatus()))
 	w.Flush()
 	return nil
 }
 
 func (s *replState) printHelp() {
 	help := [][2]string{
-		{"spaces / ls", "List spaces"},
-		{"rooms [space]", "List rooms in a space"},
-		{"use <space> [room]", "Set default space/room context"},
-		{"join <space> [room]", "Join a space or room"},
-		{"leave <space> [room]", "Leave a space or room"},
-		{"messages [space room] [n]", "Show recent messages"},
-		{"send [space room] <msg>", "Send a message"},
-		{"watch [space]", "Stream live events in background"},
+		{"rooms / ls", "List rooms"},
+		{"use [room]", "Set/show default room context"},
+		{"join <room>", "Join a room"},
+		{"leave <room>", "Leave a room"},
+		{"messages [room] [n]", "Show recent messages"},
+		{"send [room] <msg>", "Send a message"},
+		{"watch [room]", "Stream live events in background (whole server, or filtered to a room)"},
 		{"unwatch", "Stop live event stream"},
 		{"me / whoami", "Show current user"},
 		{"profile [name] [url]", "Show or switch profile"},

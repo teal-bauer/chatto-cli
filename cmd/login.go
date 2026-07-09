@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
+
 	"github.com/teal-bauer/chatto-cli/api"
 	"github.com/teal-bauer/chatto-cli/config"
 )
@@ -11,8 +12,8 @@ import (
 var loginCmd = &cobra.Command{
 	Use:   "login [profile]",
 	Short: "Log in to a Chatto instance and save the session",
-	Long: `Authenticates with a Chatto instance using email/password and stores the session
-token in the named profile (default: "default").
+	Long: `Authenticates with a Chatto instance using email/password and stores the
+bearer token (plus session cookie fallback) in the named profile (default: "default").
 
 Examples:
   chatto login
@@ -34,6 +35,8 @@ func init() {
 }
 
 func runLogin(cmd *cobra.Command, args []string) error {
+	ctx := cmd.Context()
+
 	profileName := "default"
 	if len(args) > 0 {
 		profileName = args[0]
@@ -69,27 +72,32 @@ func runLogin(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Printf("Logging in to %s as %s...\n", instance, email)
-	session, err := api.Login(instance, email, password)
+	token, session, err := api.Login(instance, email, password)
 	if err != nil {
 		return err
 	}
 
-	// Verify by fetching current user
-	client := api.New(instance, session)
-	me, err := client.Me()
+	// Verify by fetching the current viewer.
+	client := api.New(instance, token, session)
+	viewer, err := client.GetViewer(ctx)
 	if err != nil {
 		return fmt.Errorf("login succeeded but could not fetch user info: %w", err)
 	}
+	if viewer == nil {
+		return fmt.Errorf("login succeeded but viewer info was empty")
+	}
+	profile := viewer.GetProfile()
 
-	displayName := me.Login
-	if me.DisplayName != "" {
-		displayName = me.DisplayName
+	displayName := profile.GetLogin()
+	if profile.GetDisplayName() != "" {
+		displayName = profile.GetDisplayName()
 	}
 
 	prof := config.Profile{
 		Instance: instance,
+		Token:    token,
 		Session:  session,
-		Login:    me.Login,
+		Login:    profile.GetLogin(),
 	}
 
 	cfg, _ := config.Load()

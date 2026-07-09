@@ -1,182 +1,204 @@
-// Package api provides a GraphQL client for the Chatto API.
+// Package api provides a ConnectRPC + realtime client for the Chatto API.
+//
+// It replaces the removed GraphQL API (POST /api/graphql, a
+// graphql-transport-ws subscription, session-cookie auth) with ConnectRPC
+// (POST {instance}/api/connect/...) plus a protobuf WebSocket
+// ({instance}/api/realtime) and opaque bearer tokens. See client.go for
+// transport/auth, rpc.go for the typed RPC surface, watch.go for the
+// realtime stream, and hydrate.go for turning realtime invalidation signals
+// into renderable data.
 package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"time"
+
+	"connectrpc.com/connect"
+
+	apiv1connect "github.com/teal-bauer/chatto-cli/internal/pb/chatto/api/v1/apiv1connect"
 )
 
-// Client is an authenticated HTTP client for the Chatto GraphQL API.
+// Client is an authenticated ConnectRPC client for the Chatto API, plus the
+// state (instance URL, auth) needed to open the realtime WebSocket.
 type Client struct {
-	instance string
-	session  string
-	http     *http.Client
+	instance   string
+	connectURL string
+	wsURL      string
+	token      string
+	session    string
+	http       *http.Client
+
+	viewer        apiv1connect.ViewerServiceClient
+	roomDirectory apiv1connect.RoomDirectoryServiceClient
+	room          apiv1connect.RoomServiceClient
+	message       apiv1connect.MessageServiceClient
+	user          apiv1connect.UserServiceClient
+	account       apiv1connect.MyAccountServiceClient
 }
 
-// New creates a new authenticated Client.
-func New(instance, session string) *Client {
-	return &Client{
-		instance: strings.TrimRight(instance, "/"),
-		session:  session,
-		http:     &http.Client{Timeout: 30 * time.Second},
+// New creates a new authenticated Client for instance. Calls prefer bearer
+// token auth (Authorization: Bearer <token>) and fall back to the
+// chatto_session cookie when token is empty.
+func New(instance, token, session string) *Client {
+	instance = strings.TrimRight(instance, "/")
+	c := &Client{
+		instance:   instance,
+		connectURL: instance + "/api/connect",
+		wsURL:      toWSURL(instance) + "/api/realtime",
+		token:      token,
+		session:    session,
+		http:       &http.Client{Timeout: 30 * time.Second},
 	}
+
+	opt := connect.WithInterceptors(authInterceptor(token, session))
+	c.viewer = apiv1connect.NewViewerServiceClient(c.http, c.connectURL, opt)
+	c.roomDirectory = apiv1connect.NewRoomDirectoryServiceClient(c.http, c.connectURL, opt)
+	c.room = apiv1connect.NewRoomServiceClient(c.http, c.connectURL, opt)
+	c.message = apiv1connect.NewMessageServiceClient(c.http, c.connectURL, opt)
+	c.user = apiv1connect.NewUserServiceClient(c.http, c.connectURL, opt)
+	c.account = apiv1connect.NewMyAccountServiceClient(c.http, c.connectURL, opt)
+	return c
 }
 
-// Instance returns the base URL.
+// Instance returns the base instance URL (no trailing slash).
 func (c *Client) Instance() string { return c.instance }
 
-type gqlRequest struct {
-	Query     string         `json:"query"`
-	Variables map[string]any `json:"variables,omitempty"`
+// Token returns the bearer token used for auth (may be empty if the client
+// relies on the session cookie only).
+func (c *Client) Token() string { return c.token }
+
+func toWSURL(instance string) string {
+	switch {
+	case strings.HasPrefix(instance, "https://"):
+		return "wss://" + instance[len("https://"):]
+	case strings.HasPrefix(instance, "http://"):
+		return "ws://" + instance[len("http://"):]
+	default:
+		return "wss://" + instance
+	}
 }
 
-type gqlResponse struct {
-	Data   json.RawMessage `json:"data"`
-	Errors []struct {
-		Message string `json:"message"`
-	} `json:"errors"`
-}
-
-// GraphQLError is returned when the API responds with errors.
-type GraphQLError struct {
-	Messages []string
-}
-
-func (e *GraphQLError) Error() string {
-	return "GraphQL error: " + strings.Join(e.Messages, "; ")
-}
-
-// ExecuteRaw posts a GraphQL query and returns the raw data field bytes.
-func (c *Client) ExecuteRaw(query string, variables map[string]any) (json.RawMessage, error) {
-	body, err := json.Marshal(gqlRequest{Query: query, Variables: variables})
-	if err != nil {
-		return nil, err
-	}
-	req, err := http.NewRequest("POST", c.instance+"/api/graphql", bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/graphql-response+json, application/json")
-	req.Header.Set("Cookie", "chatto_session="+c.session)
-	req.Header.Set("Origin", c.instance)
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(raw))
-	}
-	var gql gqlResponse
-	if err := json.Unmarshal(raw, &gql); err != nil {
-		return nil, fmt.Errorf("decoding response: %w", err)
-	}
-	if len(gql.Errors) > 0 {
-		msgs := make([]string, len(gql.Errors))
-		for i, e := range gql.Errors {
-			msgs[i] = e.Message
+// authInterceptor attaches bearer or cookie auth to every outgoing Connect
+// call. Token takes precedence; the session cookie is a fallback for
+// deployments/flows that haven't picked up a bearer token yet.
+func authInterceptor(token, session string) connect.Interceptor {
+	return connect.UnaryInterceptorFunc(func(next connect.UnaryFunc) connect.UnaryFunc {
+		return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
+			switch {
+			case token != "":
+				req.Header().Set("Authorization", "Bearer "+token)
+			case session != "":
+				req.Header().Set("Cookie", "chatto_session="+session)
+			}
+			return next(ctx, req)
 		}
-		return nil, &GraphQLError{Messages: msgs}
-	}
-	return gql.Data, nil
+	})
 }
 
-// Execute posts a GraphQL query and decodes the data field into out.
-func (c *Client) Execute(query string, variables map[string]any, out any) error {
-	body, err := json.Marshal(gqlRequest{Query: query, Variables: variables})
-	if err != nil {
-		return err
-	}
+// ChattoError is a failed Connect RPC call, preserving the original error
+// code so callers can branch on it without importing connectrpc.com/connect
+// directly.
+type ChattoError struct {
+	Code    connect.Code
+	Message string
+}
 
-	req, err := http.NewRequest("POST", c.instance+"/api/graphql", bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/graphql-response+json, application/json")
-	req.Header.Set("Cookie", "chatto_session="+c.session)
-	req.Header.Set("Origin", c.instance)
+func (e *ChattoError) Error() string {
+	return fmt.Sprintf("%s: %s", e.Code, e.Message)
+}
 
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
+// ErrUnauthenticated indicates the bearer token/session was rejected
+// (connect.CodeUnauthenticated). Callers should re-login (via Login) and
+// retry, rather than treat it as an unrecoverable error.
+type ErrUnauthenticated struct {
+	*ChattoError
+}
 
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
+// mapError translates a connect.Error into a *ChattoError (or
+// *ErrUnauthenticated for CodeUnauthenticated). Errors that aren't
+// connect.Errors (e.g. network failures before a response was received)
+// pass through unchanged.
+func mapError(err error) error {
+	if err == nil {
+		return nil
 	}
-
-	if resp.StatusCode >= 400 {
-		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(raw))
-	}
-
-	var gql gqlResponse
-	if err := json.Unmarshal(raw, &gql); err != nil {
-		return fmt.Errorf("decoding response: %w", err)
-	}
-
-	if len(gql.Errors) > 0 {
-		msgs := make([]string, len(gql.Errors))
-		for i, e := range gql.Errors {
-			msgs[i] = e.Message
+	var connErr *connect.Error
+	if errors.As(err, &connErr) {
+		ce := &ChattoError{Code: connErr.Code(), Message: connErr.Message()}
+		if connErr.Code() == connect.CodeUnauthenticated {
+			return &ErrUnauthenticated{ChattoError: ce}
 		}
-		return &GraphQLError{Messages: msgs}
+		return ce
 	}
-
-	if out != nil && gql.Data != nil {
-		return json.Unmarshal(gql.Data, out)
-	}
-	return nil
+	return err
 }
 
-// Login authenticates with email+password and returns the session cookie value.
-func Login(instance, identifier, password string) (string, error) {
+// isNotFound reports whether err is a connect.Error with CodeNotFound.
+func isNotFound(err error) bool {
+	var connErr *connect.Error
+	return errors.As(err, &connErr) && connErr.Code() == connect.CodeNotFound
+}
+
+// loginResponse is the JSON body returned by POST /auth/login.
+type loginResponse struct {
+	Token string `json:"token"`
+}
+
+// Login authenticates with identifier+password against instance and returns
+// the bearer token plus the chatto_session cookie value (kept as fallback
+// auth). The token is required; a missing session cookie is not an error.
+func Login(instance, identifier, password string) (token, session string, err error) {
 	instance = strings.TrimRight(instance, "/")
 	body, err := json.Marshal(map[string]string{"identifier": identifier, "password": password})
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
-	req, err := http.NewRequest("POST", instance+"/auth/login", bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPost, instance+"/auth/login", bytes.NewReader(body))
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{
 		Timeout: 30 * time.Second,
-		// Don't follow redirects — we want the Set-Cookie from the login response
+		// Don't follow redirects -- we want the Set-Cookie from the login response.
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer resp.Body.Close()
 
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", "", err
+	}
 	if resp.StatusCode >= 400 {
-		raw, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("login failed (HTTP %d): %s", resp.StatusCode, string(raw))
+		return "", "", fmt.Errorf("login failed (HTTP %d): %s", resp.StatusCode, string(raw))
 	}
 
-	for _, c := range resp.Cookies() {
-		if c.Name == "chatto_session" {
-			return c.Value, nil
+	var parsed loginResponse
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return "", "", fmt.Errorf("decoding login response: %w", err)
+	}
+	for _, ck := range resp.Cookies() {
+		if ck.Name == "chatto_session" {
+			session = ck.Value
 		}
 	}
-	return "", fmt.Errorf("login succeeded but no chatto_session cookie returned")
+	if parsed.Token == "" {
+		return "", "", fmt.Errorf("login succeeded but no token in response body")
+	}
+	return parsed.Token, session, nil
 }

@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -9,326 +9,244 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	"github.com/teal-bauer/chatto-cli/api"
+	apiv1 "github.com/teal-bauer/chatto-cli/internal/pb/chatto/api/v1"
 )
 
-// EventCache stores message content by event ID and fetches on cache miss.
-type EventCache struct {
-	mu       sync.Mutex
-	entries  map[string]cachedMsg   // eventID -> cachedMsg
-	byBodyID map[string]cachedEvent // messageBodyID -> cachedEvent
-	client   *api.Client
+// refCache resolves room-scoped event IDs to their Message, for rendering
+// thread/reply context (quoting the original message). It fetches on a
+// cache miss via GetMessage and remembers both hits and misses (e.g. a
+// message retracted since) for the life of one command/session.
+type refCache struct {
+	client *api.Client
+
+	mu    sync.Mutex
+	cache map[string]*apiv1.Message
+	done  map[string]bool
 }
 
-type cachedMsg struct {
-	actor string
-	body  string
+func newRefCache(client *api.Client) *refCache {
+	return &refCache{client: client, cache: make(map[string]*apiv1.Message), done: make(map[string]bool)}
 }
 
-type cachedEvent struct {
-	eventID string
-	roomID  string
-}
-
-func NewEventCache(client *api.Client) *EventCache {
-	return &EventCache{
-		entries:  make(map[string]cachedMsg),
-		byBodyID: make(map[string]cachedEvent),
-		client:   client,
-	}
-}
-
-func (c *EventCache) get(id string) (cachedMsg, bool) {
-	if c == nil || id == "" {
-		return cachedMsg{}, false
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	m, ok := c.entries[id]
-	return m, ok
-}
-
-func (c *EventCache) store(id, actor, body string) {
-	if c == nil || id == "" {
+func (c *refCache) store(roomID string, msg *apiv1.Message) {
+	if msg == nil || msg.GetId() == "" {
 		return
 	}
+	key := roomID + "|" + msg.GetId()
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.entries[id] = cachedMsg{actor: actor, body: body}
-}
-
-func (c *EventCache) storeBodyID(bodyID, eventID, roomID string) {
-	if c == nil || bodyID == "" {
-		return
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.byBodyID[bodyID] = cachedEvent{eventID: eventID, roomID: roomID}
-}
-
-// StoreEvents populates the cache from a slice of events.
-func (c *EventCache) StoreEvents(events []api.SpaceEvent) {
-	for _, ev := range events {
-		if ev.Event.TypeName == "MessagePostedEvent" {
-			c.store(ev.ID, actorName(ev), ev.Event.Body)
-			if ev.Event.MessageBodyID != "" {
-				c.storeBodyID(ev.Event.MessageBodyID, ev.ID, ev.Event.RoomID)
-			}
-		}
-	}
-}
-
-// RefetchByBodyID re-fetches a message event using its messageBodyID.
-func (c *EventCache) RefetchByBodyID(spaceID, bodyID string) (*api.SpaceEvent, bool) {
-	if c == nil || bodyID == "" {
-		return nil, false
-	}
-	c.mu.Lock()
-	ce, ok := c.byBodyID[bodyID]
+	c.cache[key] = msg
+	c.done[key] = true
 	c.mu.Unlock()
-	if !ok || c.client == nil {
-		return nil, false
-	}
-	ev, err := c.client.GetEventByID(spaceID, ce.roomID, ce.eventID)
-	if err != nil || ev == nil {
-		return nil, false
-	}
-	return ev, true
 }
 
-// Lookup returns the cached message content for eventID, fetching it by ID on
-// a cache miss.
-func (c *EventCache) Lookup(spaceID, roomID, eventID string) (cachedMsg, bool) {
-	if c == nil || eventID == "" {
-		return cachedMsg{}, false
-	}
-	if msg, ok := c.get(eventID); ok {
-		return msg, true
-	}
-	if c.client == nil || roomID == "" {
-		return cachedMsg{}, false
-	}
-	ev, err := c.client.GetEventByID(spaceID, roomID, eventID)
-	if err != nil || ev == nil {
-		return cachedMsg{}, false
-	}
-	actor := ""
-	if ev.Actor != nil {
-		actor = ev.Actor.DisplayName
-		if actor == "" {
-			actor = ev.Actor.Login
-		}
-	}
-	c.store(ev.ID, actor, ev.Event.Body)
-	return c.get(ev.ID)
-}
-
-var messagesLimit int
-var messagesSince string
-
-var messagesCmd = &cobra.Command{
-	Use:   "messages <space> <room>",
-	Short: "Show recent messages in a room",
-	Args:  cobra.ExactArgs(2),
-	RunE:  runMessages,
-}
-
-func init() {
-	messagesCmd.Flags().IntVarP(&messagesLimit, "limit", "n", 20, "number of messages to fetch")
-	messagesCmd.Flags().StringVar(&messagesSince, "since", "", "show messages after this event ID")
-	rootCmd.AddCommand(messagesCmd)
-}
-
-func runMessages(cmd *cobra.Command, args []string) error {
-	c, err := clientFromFlags()
-	if err != nil {
-		return err
-	}
-
-	spaceID, err := resolveSpace(c, args[0])
-	if err != nil {
-		return err
-	}
-	roomID, err := resolveRoom(c, spaceID, args[1])
-	if err != nil {
-		return err
-	}
-
-	limit := messagesLimit
-	if messagesSince != "" {
-		limit = 200 // fetch more so we can filter
-	}
-	events, err := c.GetRoomEvents(spaceID, roomID, limit)
-	if err != nil {
-		return err
-	}
-
-	if messagesSince != "" {
-		events = eventsAfter(events, messagesSince)
-	}
-
-	if flagJSON {
-		printJSON(events)
+// lookup resolves eventID (within roomID) to its Message, fetching on a
+// cache miss. Returns nil if eventID is empty or doesn't resolve.
+func (c *refCache) lookup(ctx context.Context, roomID, eventID string) *apiv1.Message {
+	if eventID == "" {
 		return nil
 	}
+	key := roomID + "|" + eventID
 
-	cache := NewEventCache(c)
-	cache.StoreEvents(events)
-	printEvents(events, c.Instance(), nil, cache)
-	return nil
+	c.mu.Lock()
+	if c.done[key] {
+		msg := c.cache[key]
+		c.mu.Unlock()
+		return msg
+	}
+	c.mu.Unlock()
+
+	msg, err := c.client.GetMessage(ctx, roomID, eventID)
+	if err != nil {
+		msg = nil
+	}
+	c.mu.Lock()
+	c.cache[key] = msg
+	c.done[key] = true
+	c.mu.Unlock()
+	return msg
 }
 
-// eventsAfter returns events that appear after the given event ID (exclusive).
-func eventsAfter(events []api.SpaceEvent, afterID string) []api.SpaceEvent {
-	for i, ev := range events {
-		if ev.ID == afterID {
-			return events[i+1:]
+// eventRenderer renders room timeline events and hydrated realtime events in
+// an IRC-like format, resolving actor names and thread/reply context on
+// demand.
+type eventRenderer struct {
+	ctx      context.Context
+	client   *api.Client
+	instance string
+	users    *api.UserCache
+	refs     *refCache
+	rooms    map[string]string // room ID -> display label; nil omits room labels
+}
+
+func newEventRenderer(ctx context.Context, client *api.Client, rooms map[string]string) *eventRenderer {
+	return &eventRenderer{
+		ctx:      ctx,
+		client:   client,
+		instance: client.Instance(),
+		users:    api.NewUserCache(client),
+		refs:     newRefCache(client),
+		rooms:    rooms,
+	}
+}
+
+func (r *eventRenderer) actorName(userID string) string {
+	if userID == "" {
+		return "unknown"
+	}
+	u, err := r.users.Get(r.ctx, userID)
+	if err != nil || u == nil {
+		return userID
+	}
+	return displayName(u, userID)
+}
+
+// displayName picks the best human-readable name for u, falling back to
+// fallback (typically the user ID) if u is nil or has neither name set.
+func displayName(u *apiv1.User, fallback string) string {
+	if u == nil {
+		return fallback
+	}
+	if u.GetDisplayName() != "" {
+		return u.GetDisplayName()
+	}
+	if u.GetLogin() != "" {
+		return u.GetLogin()
+	}
+	return fallback
+}
+
+func (r *eventRenderer) roomLabel(roomID string) string {
+	if r.rooms == nil {
+		return ""
+	}
+	if name, ok := r.rooms[roomID]; ok && name != "" {
+		return name
+	}
+	return roomID
+}
+
+// formatRef renders a short "actor: quoted body" reference to msg, used for
+// reply/reaction context lines.
+func (r *eventRenderer) formatRef(msg *apiv1.Message) string {
+	if msg == nil {
+		return ""
+	}
+	actor := r.actorName(msg.GetActorId())
+	if msg.GetBody() == "" {
+		return actor + ": [attachment]"
+	}
+	return actor + ": \"" + truncate(stripNewlines(msg.GetBody()), 60) + "\""
+}
+
+// renderTimelineEvent renders one event from a RoomTimelinePage (as returned
+// by GetRoomEvents).
+func (r *eventRenderer) renderTimelineEvent(roomID string, ev *apiv1.RoomTimelineEvent) {
+	ts := formatTimestamp(ev.GetCreatedAt())
+	actor := r.actorName(ev.GetActorId())
+
+	switch {
+	case ev.GetMessagePosted() != nil:
+		r.renderMessage(roomID, ts, ev.GetActorId(), ev.GetMessagePosted().GetMessage())
+	case ev.GetRoomCreated() != nil:
+		printStatus(ts, r.roomLabel(roomID), "*** room created")
+	case ev.GetRoomUpdated() != nil:
+		printStatus(ts, r.roomLabel(roomID), "*** room updated")
+	case ev.GetRoomDeleted() != nil:
+		printStatus(ts, r.roomLabel(roomID), "*** room deleted")
+	case ev.GetRoomArchived() != nil:
+		printStatus(ts, r.roomLabel(roomID), "*** room archived")
+	case ev.GetRoomUnarchived() != nil:
+		printStatus(ts, r.roomLabel(roomID), "*** room unarchived")
+	case ev.GetUserJoinedRoom() != nil:
+		printStatus(ts, r.roomLabel(roomID), "*** "+actor+" has joined")
+	case ev.GetUserLeftRoom() != nil:
+		printStatus(ts, r.roomLabel(roomID), "*** "+actor+" has left")
+	}
+
+	if flagDebug {
+		printProtoJSON(ev)
+	}
+}
+
+// renderMessage renders a Message: body, attachments, thread/reply context,
+// and reactions.
+func (r *eventRenderer) renderMessage(roomID, ts, actorID string, msg *apiv1.Message) {
+	if msg == nil {
+		return
+	}
+	actor := r.actorName(actorID)
+	body := renderBody(msg, r.instance)
+
+	thread := ""
+	if trID := msg.GetThreadRootEventId(); trID != "" {
+		thread = "thread"
+		if orig := r.refs.lookup(r.ctx, roomID, trID); orig != nil && orig.GetBody() != "" {
+			thread = "\"" + truncate(stripNewlines(orig.GetBody()), 40) + "\""
 		}
 	}
-	return events // ID not found, return all
-}
 
-var sendCmd = &cobra.Command{
-	Use:   "send <space> <room> <message...>",
-	Short: "Send a message to a room",
-	Args:  cobra.MinimumNArgs(3),
-	RunE:  runSend,
-}
-
-func init() {
-	rootCmd.AddCommand(sendCmd)
-}
-
-func runSend(cmd *cobra.Command, args []string) error {
-	c, err := clientFromFlags()
-	if err != nil {
-		return err
-	}
-
-	spaceID, err := resolveSpace(c, args[0])
-	if err != nil {
-		return err
-	}
-	roomID, err := resolveRoom(c, spaceID, args[1])
-	if err != nil {
-		return err
-	}
-
-	body := strings.Join(args[2:], " ")
-
-	ev, err := c.PostMessage(spaceID, roomID, body)
-	if err != nil {
-		return err
-	}
-
-	if flagJSON {
-		printJSON(ev)
-		return nil
-	}
-
-	fmt.Printf("Sent (event %s)\n", ev.ID)
-	return nil
-}
-
-// printEvents renders a list of SpaceEvents to stdout in an IRC-like format.
-// instance is prepended to relative attachment URLs.
-// roomNames maps room IDs to display names; pass nil to skip room labels.
-// cache is used for thread/reply context lookups; pass nil to skip.
-func printEvents(events []api.SpaceEvent, instance string, roomNames map[string]string, cache *EventCache) {
-	for _, ev := range events {
-		tsRaw := "[" + formatTime(ev.CreatedAt) + "]"
-		actor := actorName(ev)
-		roomName := resolveRoomName(ev.Event.RoomID, roomNames)
-
-		switch ev.Event.TypeName {
-		case "MessagePostedEvent":
-			body := renderBody(ev.Event, instance)
-			nick := "<" + actor + ">"
-			thread := ""
-			if ev.Event.InThread != "" {
-				thread = "thread"
-				if orig, ok := cache.Lookup(ev.Event.SpaceID, ev.Event.RoomID, ev.Event.InThread); ok {
-					if orig.body != "" {
-						thread = "\"" + truncate(strings.ReplaceAll(orig.body, "\n", " "), 40) + "\""
-					}
-				}
-			}
-			var ctx []string
-			if ev.Event.InReplyTo != "" {
-				if orig, ok := cache.Lookup(ev.Event.SpaceID, ev.Event.RoomID, ev.Event.InReplyTo); ok {
-					ctx = append(ctx, "↩ "+formatRef(orig))
-				}
-			}
-			var reactions []string
-			for _, r := range ev.Event.Reactions {
-				reactions = append(reactions, r.Emoji+" "+strconv.Itoa(r.Count))
-			}
-			cache.store(ev.ID, actor, ev.Event.Body)
-			if ev.Event.MessageBodyID != "" {
-				cache.storeBodyID(ev.Event.MessageBodyID, ev.ID, ev.Event.RoomID)
-			}
-			printMsg(tsRaw, roomName, thread, nick, body, ctx, reactions)
-
-		case "MessageUpdatedEvent":
-			body := ev.Event.Body
-			for _, a := range ev.Event.Attachments {
-				body += "\n" + renderAttachment(a, instance)
-			}
-			printMsg(tsRaw, roomName, "", "<"+actor+">", "[edit] "+body, nil, nil)
-
-		case "MessageDeletedEvent":
-			printStatus(tsRaw, roomName, "*** message deleted")
-
-		case "UserJoinedRoomEvent":
-			printStatus(tsRaw, roomName, "*** "+actor+" has joined")
-
-		case "UserLeftRoomEvent":
-			printStatus(tsRaw, roomName, "*** "+actor+" has left")
-
-		case "ReactionAddedEvent":
-			msg := "*** " + actor + " reacted " + ev.Event.Emoji
-			if orig, ok := cache.Lookup(ev.Event.SpaceID, ev.Event.RoomID, ev.Event.MessageEventID); ok {
-				msg += dim(" → " + formatRef(orig))
-			}
-			printStatus(tsRaw, roomName, msg)
-
-		case "ReactionRemovedEvent":
-			msg := "*** " + actor + " removed reaction " + ev.Event.Emoji
-			if orig, ok := cache.Lookup(ev.Event.SpaceID, ev.Event.RoomID, ev.Event.MessageEventID); ok {
-				msg += dim(" → " + formatRef(orig))
-			}
-			printStatus(tsRaw, roomName, msg)
-
-		case "VideoProcessingCompletedEvent":
-			msg := "*** video processed"
-			if updated, ok := cache.RefetchByBodyID(ev.Event.SpaceID, ev.Event.MessageBodyID); ok {
-				parts := []string{}
-				for _, a := range updated.Event.Attachments {
-					parts = append(parts, renderAttachment(a, instance))
-				}
-				if len(parts) > 0 {
-					msg += ": " + strings.Join(parts, " ")
-				}
-			}
-			printStatus(tsRaw, roomName, msg)
-		}
-
-		if flagDebug {
-			if len(ev.RawJSON) > 0 {
-				fmt.Printf("%s\n", dim(string(ev.RawJSON)))
-			} else {
-				b, _ := json.Marshal(ev)
-				fmt.Printf("%s\n", dim(string(b)))
-			}
+	var replyCtx []string
+	if replyID := msg.GetInReplyTo(); replyID != "" {
+		if orig := r.refs.lookup(r.ctx, roomID, replyID); orig != nil {
+			replyCtx = append(replyCtx, "↩ "+r.formatRef(orig))
 		}
 	}
+
+	var reactions []string
+	for _, rx := range msg.GetReactions() {
+		reactions = append(reactions, rx.GetEmoji()+" "+strconv.Itoa(int(rx.GetCount())))
+	}
+
+	r.refs.store(roomID, msg)
+	printMsg(ts, r.roomLabel(roomID), thread, "<"+actor+">", body, replyCtx, reactions)
+}
+
+// renderBody builds the display string for a Message: body text plus
+// attachment references.
+func renderBody(msg *apiv1.Message, instance string) string {
+	body := msg.GetBody()
+	for _, a := range msg.GetAttachments() {
+		if body != "" {
+			body += "\n"
+		}
+		body += renderAttachment(a, instance)
+	}
+	return body
+}
+
+// renderAttachment returns a Markdown image reference for image attachments,
+// or a resolved URL for other file types. Relative URLs are prefixed with
+// instance. For video attachments with completed processing, uses the first
+// transcoded variant's URL.
+func renderAttachment(a *apiv1.MessageAttachment, instance string) string {
+	resolve := func(u string) string {
+		if strings.HasPrefix(u, "/") {
+			return strings.TrimRight(instance, "/") + u
+		}
+		return u
+	}
+
+	if vp := a.GetVideoProcessing(); vp != nil && vp.GetStatus() == apiv1.MessageVideoProcessingStatus_MESSAGE_VIDEO_PROCESSING_STATUS_COMPLETED {
+		if variants := vp.GetVariants(); len(variants) > 0 {
+			return resolve(variants[0].GetAssetUrl().GetUrl())
+		}
+	}
+
+	url := resolve(a.GetAssetUrl().GetUrl())
+	if strings.HasPrefix(a.GetContentType(), "image/") {
+		return "![" + a.GetFilename() + "](" + url + ")"
+	}
+	return url
 }
 
 // printMsg prints a message line with proper multi-line continuation indent.
-// tsRaw is the timestamp without ANSI, roomName is the plain room name (empty
-// to omit), thread is the thread label (empty for non-thread messages),
-// nick is the plain nick. body may contain newlines. context lines are printed
-// after the body, dimmed. reactions follow.
+// tsRaw is the bracketed timestamp, roomName is the plain room label (empty
+// to omit), thread is the thread label (empty for non-thread messages), nick
+// is the plain nick. body may contain newlines. context lines are printed
+// after the body, dimmed, then reactions.
 func printMsg(tsRaw, roomName, thread, nick, body string, context, reactions []string) {
 	roomPart := ""
 	roomVW := 0
@@ -344,7 +262,7 @@ func printMsg(tsRaw, roomName, thread, nick, body string, context, reactions []s
 		threadVW = 1 + 8 + len(label) + 1 // " [Thread " + label + "]"
 	}
 	prefixVW := len(tsRaw) + roomVW + threadVW + 1 + len(nick) // ts + room + thread + " " + nick
-	indent := strings.Repeat(" ", prefixVW+1)                   // +1 for the space before body
+	indent := strings.Repeat(" ", prefixVW+1)                  // +1 for the space before body
 
 	prefix := dim(tsRaw) + roomPart + threadPart + " " + bold(nick)
 	lines := strings.Split(strings.TrimRight(body, "\n"), "\n")
@@ -369,78 +287,104 @@ func printStatus(tsRaw, roomName, msg string) {
 	fmt.Printf("%s%s %s\n", dim(tsRaw), roomPart, dim(msg))
 }
 
-// resolveRoomName returns the display name for a room ID, or "" if roomNames is nil.
-func resolveRoomName(roomID string, roomNames map[string]string) string {
-	if roomNames == nil {
-		return ""
+// formatTimestamp renders ts as a bracketed "[15:04]" for today or
+// "[2006-01-02 15:04]" otherwise.
+func formatTimestamp(ts *timestamppb.Timestamp) string {
+	if ts == nil {
+		return "[]"
 	}
-	if name, ok := roomNames[roomID]; ok {
-		return name
-	}
-	return roomID
-}
-
-// renderBody builds the display string for a MessagePostedEvent, appending
-// attachment references (Markdown image syntax for images, plain URL otherwise).
-func renderBody(ev api.RawEventPayload, instance string) string {
-	body := ev.Body
-	for _, a := range ev.Attachments {
-		if body != "" {
-			body += "\n"
-		}
-		body += renderAttachment(a, instance)
-	}
-	return body
-}
-
-// renderAttachment returns a Markdown image reference for image attachments,
-// or a plain URL for other file types. Relative URLs are prefixed with instance.
-// For video attachments with completed processing, uses the first variant URL.
-func renderAttachment(a api.Attachment, instance string) string {
-	resolve := func(u string) string {
-		if strings.HasPrefix(u, "/") {
-			return strings.TrimRight(instance, "/") + u
-		}
-		return u
-	}
-
-	if a.VideoProcessing != nil && a.VideoProcessing.Status == "COMPLETED" && len(a.VideoProcessing.Variants) > 0 {
-		return resolve(a.VideoProcessing.Variants[0].URL)
-	}
-
-	url := resolve(a.URL)
-	if strings.HasPrefix(a.ContentType, "image/") {
-		return "![" + a.Filename + "](" + url + ")"
-	}
-	return url
-}
-
-func formatRef(m cachedMsg) string {
-	if m.body == "" {
-		return m.actor + ": [attachment]"
-	}
-	quote := truncate(strings.ReplaceAll(m.body, "\n", " "), 60)
-	return m.actor + ": \"" + quote + "\""
-}
-
-func actorName(ev api.SpaceEvent) string {
-	if ev.Actor != nil {
-		if ev.Actor.DisplayName != "" {
-			return ev.Actor.DisplayName
-		}
-		return ev.Actor.Login
-	}
-	return ev.ActorID
-}
-
-func formatTime(ts string) string {
-	t, err := time.Parse(time.RFC3339, ts)
-	if err != nil {
-		return ts
-	}
+	t := ts.AsTime()
 	now := time.Now()
 	if t.Year() == now.Year() && t.Month() == now.Month() && t.Day() == now.Day() {
-		return t.Format("15:04")
+		return "[" + t.Format("15:04") + "]"
 	}
-	return t.Format("2006-01-02 15:04")
+	return "[" + t.Format("2006-01-02 15:04") + "]"
+}
+
+var (
+	messagesLimit  int
+	messagesBefore string
+	messagesAfter  string
+)
+
+var messagesCmd = &cobra.Command{
+	Use:   "messages <room>",
+	Short: "Show recent messages in a room",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runMessages,
+}
+
+func init() {
+	messagesCmd.Flags().IntVarP(&messagesLimit, "limit", "n", 20, "number of messages to fetch")
+	messagesCmd.Flags().StringVar(&messagesBefore, "before", "", "opaque cursor: fetch the page before this one (see RoomTimelinePage.start_cursor)")
+	messagesCmd.Flags().StringVar(&messagesAfter, "after", "", "opaque cursor: fetch the page after this one (see RoomTimelinePage.end_cursor)")
+	rootCmd.AddCommand(messagesCmd)
+}
+
+func runMessages(cmd *cobra.Command, args []string) error {
+	ctx := cmd.Context()
+	c, err := clientFromFlags()
+	if err != nil {
+		return err
+	}
+
+	roomID, err := resolveRoom(ctx, c, args[0])
+	if err != nil {
+		return err
+	}
+
+	page, err := c.GetRoomEvents(ctx, roomID, int32(messagesLimit), messagesBefore, messagesAfter)
+	if err != nil {
+		return err
+	}
+
+	if flagJSON {
+		printProtoJSON(page)
+		return nil
+	}
+
+	renderer := newEventRenderer(ctx, c, nil)
+	for _, ev := range page.GetEvents() {
+		renderer.renderTimelineEvent(roomID, ev)
+	}
+	return nil
+}
+
+var sendCmd = &cobra.Command{
+	Use:   "send <room> <message...>",
+	Short: "Send a message to a room",
+	Args:  cobra.MinimumNArgs(2),
+	RunE:  runSend,
+}
+
+func init() {
+	rootCmd.AddCommand(sendCmd)
+}
+
+func runSend(cmd *cobra.Command, args []string) error {
+	ctx := cmd.Context()
+	c, err := clientFromFlags()
+	if err != nil {
+		return err
+	}
+
+	roomID, err := resolveRoom(ctx, c, args[0])
+	if err != nil {
+		return err
+	}
+
+	body := strings.Join(args[1:], " ")
+
+	msg, err := c.CreateMessage(ctx, roomID, body, "", "")
+	if err != nil {
+		return err
+	}
+
+	if flagJSON {
+		printProtoJSON(msg)
+		return nil
+	}
+
+	fmt.Printf("Sent (event %s)\n", msg.GetId())
+	return nil
 }

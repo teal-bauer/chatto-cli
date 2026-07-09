@@ -1,12 +1,14 @@
 module github.com/teal-bauer/chatto-cli
 
-go 1.24.1
+go 1.25.0
 
 require (
+	connectrpc.com/connect v1.20.0
 	github.com/BurntSushi/toml v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/term v0.40.0
+	google.golang.org/protobuf v1.36.11
 )
 
 require (
