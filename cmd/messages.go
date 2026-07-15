@@ -138,7 +138,7 @@ func (r *eventRenderer) formatRef(msg *apiv1.Message) string {
 	if msg.GetBody() == "" {
 		return actor + ": [attachment]"
 	}
-	return actor + ": \"" + truncate(stripNewlines(msg.GetBody()), 60) + "\""
+	return actor + ": \"" + truncate(stripNewlines(expandMessageTimestamps(msg.GetBody())), 60) + "\""
 }
 
 // renderTimelineEvent renders one event from a RoomTimelinePage (as returned
@@ -207,7 +207,7 @@ func (r *eventRenderer) renderMessage(roomID, ts, actorID string, msg *apiv1.Mes
 // renderBody builds the display string for a Message: body text plus
 // attachment references.
 func renderBody(msg *apiv1.Message, instance string) string {
-	body := msg.GetBody()
+	body := expandMessageTimestamps(msg.GetBody())
 	for _, a := range msg.GetAttachments() {
 		if body != "" {
 			body += "\n"
