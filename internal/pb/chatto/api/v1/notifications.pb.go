@@ -1279,15 +1279,15 @@ const file_chatto_api_v1_notifications_proto_rawDesc = "" +
 	"\tdismissed\x18\x01 \x01(\bR\tdismissed\" \n" +
 	"\x1eDismissAllNotificationsRequest\"J\n" +
 	"\x1fDismissAllNotificationsResponse\x12'\n" +
-	"\x0fdismissed_count\x18\x01 \x01(\x05R\x0edismissedCount2\x98\a\n" +
+	"\x0fdismissed_count\x18\x01 \x01(\x05R\x0edismissedCount2\x9d\a\n" +
 	"\x13NotificationService\x12f\n" +
 	"\x11ListNotifications\x12'.chatto.api.v1.ListNotificationsRequest\x1a(.chatto.api.v1.ListNotificationsResponse\x12`\n" +
 	"\x0fGetNotification\x12%.chatto.api.v1.GetNotificationRequest\x1a&.chatto.api.v1.GetNotificationResponse\x12r\n" +
 	"\x15BatchGetNotifications\x12+.chatto.api.v1.BatchGetNotificationsRequest\x1a,.chatto.api.v1.BatchGetNotificationsResponse\x12r\n" +
 	"\x15ListRoomNotifications\x12+.chatto.api.v1.ListRoomNotificationsRequest\x1a,.chatto.api.v1.ListRoomNotificationsResponse\x12\x81\x01\n" +
 	"\x1aListRoomNotificationCounts\x120.chatto.api.v1.ListRoomNotificationCountsRequest\x1a1.chatto.api.v1.ListRoomNotificationCountsResponse\x12c\n" +
-	"\x10HasNotifications\x12&.chatto.api.v1.HasNotificationsRequest\x1a'.chatto.api.v1.HasNotificationsResponse\x12l\n" +
-	"\x13DismissNotification\x12).chatto.api.v1.DismissNotificationRequest\x1a*.chatto.api.v1.DismissNotificationResponse\x12x\n" +
+	"\x10HasNotifications\x12&.chatto.api.v1.HasNotificationsRequest\x1a'.chatto.api.v1.HasNotificationsResponse\x12q\n" +
+	"\x13DismissNotification\x12).chatto.api.v1.DismissNotificationRequest\x1a*.chatto.api.v1.DismissNotificationResponse\"\x03\x90\x02\x02\x12x\n" +
 	"\x17DismissAllNotifications\x12-.chatto.api.v1.DismissAllNotificationsRequest\x1a..chatto.api.v1.DismissAllNotificationsResponseB\xbf\x01\n" +
 	"\x11com.chatto.api.v1B\x12NotificationsProtoP\x01Z@github.com/teal-bauer/chatto-cli/internal/pb/chatto/api/v1;apiv1\xa2\x02\x03CAX\xaa\x02\rChatto.Api.V1\xca\x02\rChatto\\Api\\V1\xe2\x02\x19Chatto\\Api\\V1\\GPBMetadata\xea\x02\x0fChatto::Api::V1b\x06proto3"
 

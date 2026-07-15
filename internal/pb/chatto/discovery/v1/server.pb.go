@@ -123,9 +123,9 @@ const file_chatto_discovery_v1_server_proto_rawDesc = "" +
 	"\x10GetServerRequest\"\x83\x01\n" +
 	"\x11GetServerResponse\x12<\n" +
 	"\aprofile\x18\x01 \x01(\v2\".chatto.api.v1.ServerPublicProfileR\aprofile\x120\n" +
-	"\x05login\x18\x02 \x01(\v2\x1a.chatto.api.v1.ServerLoginR\x05login2t\n" +
-	"\x16ServerDiscoveryService\x12Z\n" +
-	"\tGetServer\x12%.chatto.discovery.v1.GetServerRequest\x1a&.chatto.discovery.v1.GetServerResponseB\xe2\x01\n" +
+	"\x05login\x18\x02 \x01(\v2\x1a.chatto.api.v1.ServerLoginR\x05login2y\n" +
+	"\x16ServerDiscoveryService\x12_\n" +
+	"\tGetServer\x12%.chatto.discovery.v1.GetServerRequest\x1a&.chatto.discovery.v1.GetServerResponse\"\x03\x90\x02\x01B\xe2\x01\n" +
 	"\x17com.chatto.discovery.v1B\vServerProtoP\x01ZLgithub.com/teal-bauer/chatto-cli/internal/pb/chatto/discovery/v1;discoveryv1\xa2\x02\x03CDX\xaa\x02\x13Chatto.Discovery.V1\xca\x02\x13Chatto\\Discovery\\V1\xe2\x02\x1fChatto\\Discovery\\V1\\GPBMetadata\xea\x02\x15Chatto::Discovery::V1b\x06proto3"
 
 var (
