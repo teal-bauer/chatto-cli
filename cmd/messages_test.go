@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -90,6 +91,21 @@ func TestRenderBody(t *testing.T) {
 	want := "look at this\n![a.png](https://chat.example.com/a.png)"
 	if got != want {
 		t.Errorf("renderBody() = %q, want %q", got, want)
+	}
+}
+
+// Every path that puts a body on screen has to expand timestamp tokens, not
+// just the main body: a reference preview showing a raw <t:...:F> is exactly
+// the thing FDR-030 rendering is meant to avoid.
+func TestRenderedBodiesExpandTimestampTokens(t *testing.T) {
+	body := "ship at <t:1745764200:F>"
+	if got := renderBody(&apiv1.Message{Body: proto.String(body)}, "https://chat.example.com"); strings.Contains(got, "<t:") {
+		t.Errorf("renderBody() left a raw token: %q", got)
+	}
+
+	r := &eventRenderer{}
+	if got := r.formatRef(&apiv1.Message{Body: proto.String(body)}); strings.Contains(got, "<t:") {
+		t.Errorf("formatRef() left a raw token: %q", got)
 	}
 }
 

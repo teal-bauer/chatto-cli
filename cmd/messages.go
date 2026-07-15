@@ -184,7 +184,7 @@ func (r *eventRenderer) renderMessage(roomID, ts, actorID string, msg *apiv1.Mes
 	if trID := msg.GetThreadRootEventId(); trID != "" {
 		thread = "thread"
 		if orig := r.refs.lookup(r.ctx, roomID, trID); orig != nil && orig.GetBody() != "" {
-			thread = "\"" + truncate(stripNewlines(orig.GetBody()), 40) + "\""
+			thread = "\"" + truncate(stripNewlines(expandMessageTimestamps(orig.GetBody())), 40) + "\""
 		}
 	}
 
