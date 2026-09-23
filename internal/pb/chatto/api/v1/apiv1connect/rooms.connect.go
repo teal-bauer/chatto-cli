@@ -33,6 +33,12 @@ const (
 // reflection-formatted method names, remove the leading slash and convert the remaining slash to a
 // period.
 const (
+	// RoomServiceGetRoomReadStateProcedure is the fully-qualified name of the RoomService's
+	// GetRoomReadState RPC.
+	RoomServiceGetRoomReadStateProcedure = "/chatto.api.v1.RoomService/GetRoomReadState"
+	// RoomServiceBatchGetRoomReadStatesProcedure is the fully-qualified name of the RoomService's
+	// BatchGetRoomReadStates RPC.
+	RoomServiceBatchGetRoomReadStatesProcedure = "/chatto.api.v1.RoomService/BatchGetRoomReadStates"
 	// RoomServiceCreateRoomProcedure is the fully-qualified name of the RoomService's CreateRoom RPC.
 	RoomServiceCreateRoomProcedure = "/chatto.api.v1.RoomService/CreateRoom"
 	// RoomServiceUpdateRoomProcedure is the fully-qualified name of the RoomService's UpdateRoom RPC.
@@ -68,9 +74,18 @@ const (
 	// RoomServiceListRoomAttachmentsProcedure is the fully-qualified name of the RoomService's
 	// ListRoomAttachments RPC.
 	RoomServiceListRoomAttachmentsProcedure = "/chatto.api.v1.RoomService/ListRoomAttachments"
-	// RoomServiceUpdateTypingIndicatorProcedure is the fully-qualified name of the RoomService's
-	// UpdateTypingIndicator RPC.
-	RoomServiceUpdateTypingIndicatorProcedure = "/chatto.api.v1.RoomService/UpdateTypingIndicator"
+	// RoomServiceListPinnedMessagesProcedure is the fully-qualified name of the RoomService's
+	// ListPinnedMessages RPC.
+	RoomServiceListPinnedMessagesProcedure = "/chatto.api.v1.RoomService/ListPinnedMessages"
+	// RoomServiceCreatePinnedMessageProcedure is the fully-qualified name of the RoomService's
+	// CreatePinnedMessage RPC.
+	RoomServiceCreatePinnedMessageProcedure = "/chatto.api.v1.RoomService/CreatePinnedMessage"
+	// RoomServiceDeletePinnedMessageProcedure is the fully-qualified name of the RoomService's
+	// DeletePinnedMessage RPC.
+	RoomServiceDeletePinnedMessageProcedure = "/chatto.api.v1.RoomService/DeletePinnedMessage"
+	// RoomServiceRefreshTypingIndicatorProcedure is the fully-qualified name of the RoomService's
+	// RefreshTypingIndicator RPC.
+	RoomServiceRefreshTypingIndicatorProcedure = "/chatto.api.v1.RoomService/RefreshTypingIndicator"
 	// RoomServiceGetRoomEventsProcedure is the fully-qualified name of the RoomService's GetRoomEvents
 	// RPC.
 	RoomServiceGetRoomEventsProcedure = "/chatto.api.v1.RoomService/GetRoomEvents"
@@ -88,6 +103,13 @@ const (
 
 // RoomServiceClient is a client for the chatto.api.v1.RoomService service.
 type RoomServiceClient interface {
+	// Reads the current viewer's stored marker without changing it. Requires the
+	// same membership and read access as MarkRoomAsRead. Missing resources
+	// return NOT_FOUND; inaccessible resources return PERMISSION_DENIED.
+	GetRoomReadState(context.Context, *connect.Request[v1.GetRoomReadStateRequest]) (*connect.Response[v1.GetRoomReadStateResponse], error)
+	// Reads up to 100 states under the same authorization as GetRoomReadState.
+	// Missing and inaccessible resources are omitted; duplicates use first-seen order.
+	BatchGetRoomReadStates(context.Context, *connect.Request[v1.BatchGetRoomReadStatesRequest]) (*connect.Response[v1.BatchGetRoomReadStatesResponse], error)
 	// Creates a new channel room in a room group. The caller must be allowed to
 	// create rooms in the target group.
 	CreateRoom(context.Context, *connect.Request[v1.CreateRoomRequest]) (*connect.Response[v1.CreateRoomResponse], error)
@@ -105,49 +127,80 @@ type RoomServiceClient interface {
 	// Joins every unarchived room in a group that the current user can join.
 	// Already-joined and non-joinable rooms are skipped.
 	JoinRoomGroup(context.Context, *connect.Request[v1.JoinRoomGroupRequest]) (*connect.Response[v1.JoinRoomGroupResponse], error)
-	// Starts or fetches a direct-message room for the current user and the
-	// requested participant set. The caller must be allowed to start DMs.
+	// Starts a direct-message room for the current human user and the requested
+	// participant set, or fetches its existing DM. message.post is required
+	// only when the DM must be created. A valid request from a bot receives
+	// PERMISSION_DENIED and cannot use this RPC to fetch an existing DM.
 	StartDM(context.Context, *connect.Request[v1.StartDMRequest]) (*connect.Response[v1.StartDMResponse], error)
 	// Leaves the room as the current user. Direct-message and universal rooms
 	// cannot be left.
 	LeaveRoom(context.Context, *connect.Request[v1.LeaveRoomRequest]) (*connect.Response[v1.LeaveRoomResponse], error)
-	// Lists effective room members. Existing members may list their room;
-	// nonmembers of a channel room need both room.list and room.join.
-	ListMembers(context.Context, *connect.Request[v1.ListRoomMembersRequest]) (*connect.Response[v1.ListRoomMembersResponse], error)
-	// Gets one explicit member of a room. The caller must be a member of the
-	// room. Returns NOT_FOUND when the target is unknown or not a room member.
-	GetMember(context.Context, *connect.Request[v1.GetRoomMemberRequest]) (*connect.Response[v1.GetRoomMemberResponse], error)
-	// Gets explicit room member rows for multiple users. The caller must be a
-	// member of the room.
-	BatchGetMembers(context.Context, *connect.Request[v1.BatchGetRoomMembersRequest]) (*connect.Response[v1.BatchGetRoomMembersResponse], error)
-	// Adds a user as an explicit member of a channel room. The caller must be
-	// allowed to manage the room. Direct-message and universal rooms cannot be
-	// managed this way.
+	// Lists effective room member IDs in ascending ID order. Resolve user details
+	// with UserService.BatchGetUsers. Existing members and room.manage holders may
+	// list a channel room; other nonmembers need both room.list and room.join.
+	ListMembers(context.Context, *connect.Request[v1.ListMembersRequest]) (*connect.Response[v1.ListMembersResponse], error)
+	// Gets one effective member, including automatic universal membership.
+	// Channel-room members, room.manage holders, and user.manage-accounts holders
+	// may read members. Bot owners and bot.manage holders may read their target
+	// bots only. DMs require caller membership. Returns NOT_FOUND for nonmembers.
+	GetMember(context.Context, *connect.Request[v1.GetMemberRequest]) (*connect.Response[v1.GetMemberResponse], error)
+	// Gets effective member rows for the requested accounts. Uses the same
+	// authorization as GetMember; omits unknown accounts and nonmembers.
+	BatchGetMembers(context.Context, *connect.Request[v1.BatchGetMembersRequest]) (*connect.Response[v1.BatchGetMembersResponse], error)
+	// Adds an account as an explicit channel-room member. room.manage for this
+	// room or user.manage-accounts overrides the target's missing room.join.
+	// Bot owners and bot.manage holders may also add bots, but without either
+	// override the bot needs effective room.join, bounded by its owner's authority.
+	// Preserves permission grants. Bans, archived, universal, and DM rooms prevent adding.
 	AddMember(context.Context, *connect.Request[v1.AddMemberRequest]) (*connect.Response[v1.AddMemberResponse], error)
-	// Removes a user from a channel room's explicit members. The caller must be
-	// allowed to manage the room. Direct-message and universal rooms cannot be
-	// managed this way.
+	// Removes an explicit channel-room member. Requires room.manage for this room,
+	// user.manage-accounts, ownership of the target bot, or bot.manage.
+	// Removal is allowed after room.join is lost and from archived rooms.
+	// Preserves permission grants. Universal and DM membership cannot be edited.
 	RemoveMember(context.Context, *connect.Request[v1.RemoveMemberRequest]) (*connect.Response[v1.RemoveMemberResponse], error)
 	// Lists active channel room bans. The caller must be allowed to moderate room
 	// membership bans.
 	ListBans(context.Context, *connect.Request[v1.ListBansRequest]) (*connect.Response[v1.ListBansResponse], error)
 	// Lists current message-owned room attachments. Authentication and room
-	// membership are required. Returns PERMISSION_DENIED when the room is
+	// membership are required. Attachments also require message.read or a
+	// matching thread relationship with message.read-interactions. The server omits attachments from
+	// inaccessible threads. Returns PERMISSION_DENIED when the room is
 	// inaccessible to the caller.
 	ListRoomAttachments(context.Context, *connect.Request[v1.ListRoomAttachmentsRequest]) (*connect.Response[v1.ListRoomAttachmentsResponse], error)
+	// Lists current pinned messages in a channel room. Room membership plus
+	// message.read or message.read-interactions are required. The server omits
+	// pins from threads that the caller cannot read. Direct-message rooms do not
+	// support pins.
+	ListPinnedMessages(context.Context, *connect.Request[v1.ListPinnedMessagesRequest]) (*connect.Response[v1.ListPinnedMessagesResponse], error)
+	// Pins a current message. The caller must have room.manage and must be able
+	// to read the message. Repeating an existing pin is idempotent. Direct-message
+	// rooms are rejected.
+	CreatePinnedMessage(context.Context, *connect.Request[v1.CreatePinnedMessageRequest]) (*connect.Response[v1.CreatePinnedMessageResponse], error)
+	// Removes a current pin. The caller must have room.manage. Removing a
+	// missing pin is idempotent. Direct-message rooms are rejected.
+	DeletePinnedMessage(context.Context, *connect.Request[v1.DeletePinnedMessageRequest]) (*connect.Response[v1.DeletePinnedMessageResponse], error)
 	// Refreshes the current user's live-only typing indicator for a room or
 	// thread. Room membership is required; message posting permission is not.
-	UpdateTypingIndicator(context.Context, *connect.Request[v1.UpdateTypingIndicatorRequest]) (*connect.Response[v1.UpdateTypingIndicatorResponse], error)
-	// Returns one page of room timeline events, including related user data needed
-	// to render the page.
+	// Send at most once every 2 seconds while typing. After posting a message,
+	// the next typing activity can send immediately. Stop sending when typing
+	// stops; receivers clear the indicator after 6 seconds without an event.
+	RefreshTypingIndicator(context.Context, *connect.Request[v1.RefreshTypingIndicatorRequest]) (*connect.Response[v1.RefreshTypingIndicatorResponse], error)
+	// Returns one page of room timeline events, including related user data
+	// needed to render the page. Room membership is required. Reads also require
+	// message.read or message.read-interactions. The server returns only related
+	// thread roots for an interaction-scoped caller.
 	GetRoomEvents(context.Context, *connect.Request[v1.GetRoomEventsRequest]) (*connect.Response[v1.GetRoomEventsResponse], error)
 	// Returns a room timeline window centered around a specific event. Use this to
 	// open a permalink, search result, or notification target in context. Returns
 	// NOT_FOUND when the anchor event is missing or not visible in the room
-	// timeline and PERMISSION_DENIED when the room is inaccessible.
+	// timeline. Returns PERMISSION_DENIED when room membership or both read modes
+	// are missing, or when the anchor is in an unrelated thread.
 	GetRoomEventsAround(context.Context, *connect.Request[v1.GetRoomEventsAroundRequest]) (*connect.Response[v1.GetRoomEventsAroundResponse], error)
-	// Marks a room timeline as read through the supplied event. If no event is
-	// supplied, the server marks through the room's latest root event. Clients
+	// Marks a room timeline as read through the supplied event. Room membership
+	// is required. Reads also require message.read or
+	// message.read-interactions. If no event
+	// is supplied, the server marks through the latest root event that the caller
+	// can read. Clients
 	// usually call this after the user has viewed the latest visible event in the
 	// room.
 	MarkRoomAsRead(context.Context, *connect.Request[v1.MarkRoomAsReadRequest]) (*connect.Response[v1.MarkRoomAsReadResponse], error)
@@ -170,6 +223,18 @@ func NewRoomServiceClient(httpClient connect.HTTPClient, baseURL string, opts ..
 	baseURL = strings.TrimRight(baseURL, "/")
 	roomServiceMethods := v1.File_chatto_api_v1_rooms_proto.Services().ByName("RoomService").Methods()
 	return &roomServiceClient{
+		getRoomReadState: connect.NewClient[v1.GetRoomReadStateRequest, v1.GetRoomReadStateResponse](
+			httpClient,
+			baseURL+RoomServiceGetRoomReadStateProcedure,
+			connect.WithSchema(roomServiceMethods.ByName("GetRoomReadState")),
+			connect.WithClientOptions(opts...),
+		),
+		batchGetRoomReadStates: connect.NewClient[v1.BatchGetRoomReadStatesRequest, v1.BatchGetRoomReadStatesResponse](
+			httpClient,
+			baseURL+RoomServiceBatchGetRoomReadStatesProcedure,
+			connect.WithSchema(roomServiceMethods.ByName("BatchGetRoomReadStates")),
+			connect.WithClientOptions(opts...),
+		),
 		createRoom: connect.NewClient[v1.CreateRoomRequest, v1.CreateRoomResponse](
 			httpClient,
 			baseURL+RoomServiceCreateRoomProcedure,
@@ -218,19 +283,19 @@ func NewRoomServiceClient(httpClient connect.HTTPClient, baseURL string, opts ..
 			connect.WithSchema(roomServiceMethods.ByName("LeaveRoom")),
 			connect.WithClientOptions(opts...),
 		),
-		listMembers: connect.NewClient[v1.ListRoomMembersRequest, v1.ListRoomMembersResponse](
+		listMembers: connect.NewClient[v1.ListMembersRequest, v1.ListMembersResponse](
 			httpClient,
 			baseURL+RoomServiceListMembersProcedure,
 			connect.WithSchema(roomServiceMethods.ByName("ListMembers")),
 			connect.WithClientOptions(opts...),
 		),
-		getMember: connect.NewClient[v1.GetRoomMemberRequest, v1.GetRoomMemberResponse](
+		getMember: connect.NewClient[v1.GetMemberRequest, v1.GetMemberResponse](
 			httpClient,
 			baseURL+RoomServiceGetMemberProcedure,
 			connect.WithSchema(roomServiceMethods.ByName("GetMember")),
 			connect.WithClientOptions(opts...),
 		),
-		batchGetMembers: connect.NewClient[v1.BatchGetRoomMembersRequest, v1.BatchGetRoomMembersResponse](
+		batchGetMembers: connect.NewClient[v1.BatchGetMembersRequest, v1.BatchGetMembersResponse](
 			httpClient,
 			baseURL+RoomServiceBatchGetMembersProcedure,
 			connect.WithSchema(roomServiceMethods.ByName("BatchGetMembers")),
@@ -260,10 +325,28 @@ func NewRoomServiceClient(httpClient connect.HTTPClient, baseURL string, opts ..
 			connect.WithSchema(roomServiceMethods.ByName("ListRoomAttachments")),
 			connect.WithClientOptions(opts...),
 		),
-		updateTypingIndicator: connect.NewClient[v1.UpdateTypingIndicatorRequest, v1.UpdateTypingIndicatorResponse](
+		listPinnedMessages: connect.NewClient[v1.ListPinnedMessagesRequest, v1.ListPinnedMessagesResponse](
 			httpClient,
-			baseURL+RoomServiceUpdateTypingIndicatorProcedure,
-			connect.WithSchema(roomServiceMethods.ByName("UpdateTypingIndicator")),
+			baseURL+RoomServiceListPinnedMessagesProcedure,
+			connect.WithSchema(roomServiceMethods.ByName("ListPinnedMessages")),
+			connect.WithClientOptions(opts...),
+		),
+		createPinnedMessage: connect.NewClient[v1.CreatePinnedMessageRequest, v1.CreatePinnedMessageResponse](
+			httpClient,
+			baseURL+RoomServiceCreatePinnedMessageProcedure,
+			connect.WithSchema(roomServiceMethods.ByName("CreatePinnedMessage")),
+			connect.WithClientOptions(opts...),
+		),
+		deletePinnedMessage: connect.NewClient[v1.DeletePinnedMessageRequest, v1.DeletePinnedMessageResponse](
+			httpClient,
+			baseURL+RoomServiceDeletePinnedMessageProcedure,
+			connect.WithSchema(roomServiceMethods.ByName("DeletePinnedMessage")),
+			connect.WithClientOptions(opts...),
+		),
+		refreshTypingIndicator: connect.NewClient[v1.RefreshTypingIndicatorRequest, v1.RefreshTypingIndicatorResponse](
+			httpClient,
+			baseURL+RoomServiceRefreshTypingIndicatorProcedure,
+			connect.WithSchema(roomServiceMethods.ByName("RefreshTypingIndicator")),
 			connect.WithClientOptions(opts...),
 		),
 		getRoomEvents: connect.NewClient[v1.GetRoomEventsRequest, v1.GetRoomEventsResponse](
@@ -301,27 +384,42 @@ func NewRoomServiceClient(httpClient connect.HTTPClient, baseURL string, opts ..
 
 // roomServiceClient implements RoomServiceClient.
 type roomServiceClient struct {
-	createRoom            *connect.Client[v1.CreateRoomRequest, v1.CreateRoomResponse]
-	updateRoom            *connect.Client[v1.UpdateRoomRequest, v1.UpdateRoomResponse]
-	archiveRoom           *connect.Client[v1.ArchiveRoomRequest, v1.ArchiveRoomResponse]
-	unarchiveRoom         *connect.Client[v1.UnarchiveRoomRequest, v1.UnarchiveRoomResponse]
-	joinRoom              *connect.Client[v1.JoinRoomRequest, v1.JoinRoomResponse]
-	joinRoomGroup         *connect.Client[v1.JoinRoomGroupRequest, v1.JoinRoomGroupResponse]
-	startDM               *connect.Client[v1.StartDMRequest, v1.StartDMResponse]
-	leaveRoom             *connect.Client[v1.LeaveRoomRequest, v1.LeaveRoomResponse]
-	listMembers           *connect.Client[v1.ListRoomMembersRequest, v1.ListRoomMembersResponse]
-	getMember             *connect.Client[v1.GetRoomMemberRequest, v1.GetRoomMemberResponse]
-	batchGetMembers       *connect.Client[v1.BatchGetRoomMembersRequest, v1.BatchGetRoomMembersResponse]
-	addMember             *connect.Client[v1.AddMemberRequest, v1.AddMemberResponse]
-	removeMember          *connect.Client[v1.RemoveMemberRequest, v1.RemoveMemberResponse]
-	listBans              *connect.Client[v1.ListBansRequest, v1.ListBansResponse]
-	listRoomAttachments   *connect.Client[v1.ListRoomAttachmentsRequest, v1.ListRoomAttachmentsResponse]
-	updateTypingIndicator *connect.Client[v1.UpdateTypingIndicatorRequest, v1.UpdateTypingIndicatorResponse]
-	getRoomEvents         *connect.Client[v1.GetRoomEventsRequest, v1.GetRoomEventsResponse]
-	getRoomEventsAround   *connect.Client[v1.GetRoomEventsAroundRequest, v1.GetRoomEventsAroundResponse]
-	markRoomAsRead        *connect.Client[v1.MarkRoomAsReadRequest, v1.MarkRoomAsReadResponse]
-	banMember             *connect.Client[v1.BanMemberRequest, v1.BanMemberResponse]
-	unbanMember           *connect.Client[v1.UnbanMemberRequest, v1.UnbanMemberResponse]
+	getRoomReadState       *connect.Client[v1.GetRoomReadStateRequest, v1.GetRoomReadStateResponse]
+	batchGetRoomReadStates *connect.Client[v1.BatchGetRoomReadStatesRequest, v1.BatchGetRoomReadStatesResponse]
+	createRoom             *connect.Client[v1.CreateRoomRequest, v1.CreateRoomResponse]
+	updateRoom             *connect.Client[v1.UpdateRoomRequest, v1.UpdateRoomResponse]
+	archiveRoom            *connect.Client[v1.ArchiveRoomRequest, v1.ArchiveRoomResponse]
+	unarchiveRoom          *connect.Client[v1.UnarchiveRoomRequest, v1.UnarchiveRoomResponse]
+	joinRoom               *connect.Client[v1.JoinRoomRequest, v1.JoinRoomResponse]
+	joinRoomGroup          *connect.Client[v1.JoinRoomGroupRequest, v1.JoinRoomGroupResponse]
+	startDM                *connect.Client[v1.StartDMRequest, v1.StartDMResponse]
+	leaveRoom              *connect.Client[v1.LeaveRoomRequest, v1.LeaveRoomResponse]
+	listMembers            *connect.Client[v1.ListMembersRequest, v1.ListMembersResponse]
+	getMember              *connect.Client[v1.GetMemberRequest, v1.GetMemberResponse]
+	batchGetMembers        *connect.Client[v1.BatchGetMembersRequest, v1.BatchGetMembersResponse]
+	addMember              *connect.Client[v1.AddMemberRequest, v1.AddMemberResponse]
+	removeMember           *connect.Client[v1.RemoveMemberRequest, v1.RemoveMemberResponse]
+	listBans               *connect.Client[v1.ListBansRequest, v1.ListBansResponse]
+	listRoomAttachments    *connect.Client[v1.ListRoomAttachmentsRequest, v1.ListRoomAttachmentsResponse]
+	listPinnedMessages     *connect.Client[v1.ListPinnedMessagesRequest, v1.ListPinnedMessagesResponse]
+	createPinnedMessage    *connect.Client[v1.CreatePinnedMessageRequest, v1.CreatePinnedMessageResponse]
+	deletePinnedMessage    *connect.Client[v1.DeletePinnedMessageRequest, v1.DeletePinnedMessageResponse]
+	refreshTypingIndicator *connect.Client[v1.RefreshTypingIndicatorRequest, v1.RefreshTypingIndicatorResponse]
+	getRoomEvents          *connect.Client[v1.GetRoomEventsRequest, v1.GetRoomEventsResponse]
+	getRoomEventsAround    *connect.Client[v1.GetRoomEventsAroundRequest, v1.GetRoomEventsAroundResponse]
+	markRoomAsRead         *connect.Client[v1.MarkRoomAsReadRequest, v1.MarkRoomAsReadResponse]
+	banMember              *connect.Client[v1.BanMemberRequest, v1.BanMemberResponse]
+	unbanMember            *connect.Client[v1.UnbanMemberRequest, v1.UnbanMemberResponse]
+}
+
+// GetRoomReadState calls chatto.api.v1.RoomService.GetRoomReadState.
+func (c *roomServiceClient) GetRoomReadState(ctx context.Context, req *connect.Request[v1.GetRoomReadStateRequest]) (*connect.Response[v1.GetRoomReadStateResponse], error) {
+	return c.getRoomReadState.CallUnary(ctx, req)
+}
+
+// BatchGetRoomReadStates calls chatto.api.v1.RoomService.BatchGetRoomReadStates.
+func (c *roomServiceClient) BatchGetRoomReadStates(ctx context.Context, req *connect.Request[v1.BatchGetRoomReadStatesRequest]) (*connect.Response[v1.BatchGetRoomReadStatesResponse], error) {
+	return c.batchGetRoomReadStates.CallUnary(ctx, req)
 }
 
 // CreateRoom calls chatto.api.v1.RoomService.CreateRoom.
@@ -365,17 +463,17 @@ func (c *roomServiceClient) LeaveRoom(ctx context.Context, req *connect.Request[
 }
 
 // ListMembers calls chatto.api.v1.RoomService.ListMembers.
-func (c *roomServiceClient) ListMembers(ctx context.Context, req *connect.Request[v1.ListRoomMembersRequest]) (*connect.Response[v1.ListRoomMembersResponse], error) {
+func (c *roomServiceClient) ListMembers(ctx context.Context, req *connect.Request[v1.ListMembersRequest]) (*connect.Response[v1.ListMembersResponse], error) {
 	return c.listMembers.CallUnary(ctx, req)
 }
 
 // GetMember calls chatto.api.v1.RoomService.GetMember.
-func (c *roomServiceClient) GetMember(ctx context.Context, req *connect.Request[v1.GetRoomMemberRequest]) (*connect.Response[v1.GetRoomMemberResponse], error) {
+func (c *roomServiceClient) GetMember(ctx context.Context, req *connect.Request[v1.GetMemberRequest]) (*connect.Response[v1.GetMemberResponse], error) {
 	return c.getMember.CallUnary(ctx, req)
 }
 
 // BatchGetMembers calls chatto.api.v1.RoomService.BatchGetMembers.
-func (c *roomServiceClient) BatchGetMembers(ctx context.Context, req *connect.Request[v1.BatchGetRoomMembersRequest]) (*connect.Response[v1.BatchGetRoomMembersResponse], error) {
+func (c *roomServiceClient) BatchGetMembers(ctx context.Context, req *connect.Request[v1.BatchGetMembersRequest]) (*connect.Response[v1.BatchGetMembersResponse], error) {
 	return c.batchGetMembers.CallUnary(ctx, req)
 }
 
@@ -399,9 +497,24 @@ func (c *roomServiceClient) ListRoomAttachments(ctx context.Context, req *connec
 	return c.listRoomAttachments.CallUnary(ctx, req)
 }
 
-// UpdateTypingIndicator calls chatto.api.v1.RoomService.UpdateTypingIndicator.
-func (c *roomServiceClient) UpdateTypingIndicator(ctx context.Context, req *connect.Request[v1.UpdateTypingIndicatorRequest]) (*connect.Response[v1.UpdateTypingIndicatorResponse], error) {
-	return c.updateTypingIndicator.CallUnary(ctx, req)
+// ListPinnedMessages calls chatto.api.v1.RoomService.ListPinnedMessages.
+func (c *roomServiceClient) ListPinnedMessages(ctx context.Context, req *connect.Request[v1.ListPinnedMessagesRequest]) (*connect.Response[v1.ListPinnedMessagesResponse], error) {
+	return c.listPinnedMessages.CallUnary(ctx, req)
+}
+
+// CreatePinnedMessage calls chatto.api.v1.RoomService.CreatePinnedMessage.
+func (c *roomServiceClient) CreatePinnedMessage(ctx context.Context, req *connect.Request[v1.CreatePinnedMessageRequest]) (*connect.Response[v1.CreatePinnedMessageResponse], error) {
+	return c.createPinnedMessage.CallUnary(ctx, req)
+}
+
+// DeletePinnedMessage calls chatto.api.v1.RoomService.DeletePinnedMessage.
+func (c *roomServiceClient) DeletePinnedMessage(ctx context.Context, req *connect.Request[v1.DeletePinnedMessageRequest]) (*connect.Response[v1.DeletePinnedMessageResponse], error) {
+	return c.deletePinnedMessage.CallUnary(ctx, req)
+}
+
+// RefreshTypingIndicator calls chatto.api.v1.RoomService.RefreshTypingIndicator.
+func (c *roomServiceClient) RefreshTypingIndicator(ctx context.Context, req *connect.Request[v1.RefreshTypingIndicatorRequest]) (*connect.Response[v1.RefreshTypingIndicatorResponse], error) {
+	return c.refreshTypingIndicator.CallUnary(ctx, req)
 }
 
 // GetRoomEvents calls chatto.api.v1.RoomService.GetRoomEvents.
@@ -431,6 +544,13 @@ func (c *roomServiceClient) UnbanMember(ctx context.Context, req *connect.Reques
 
 // RoomServiceHandler is an implementation of the chatto.api.v1.RoomService service.
 type RoomServiceHandler interface {
+	// Reads the current viewer's stored marker without changing it. Requires the
+	// same membership and read access as MarkRoomAsRead. Missing resources
+	// return NOT_FOUND; inaccessible resources return PERMISSION_DENIED.
+	GetRoomReadState(context.Context, *connect.Request[v1.GetRoomReadStateRequest]) (*connect.Response[v1.GetRoomReadStateResponse], error)
+	// Reads up to 100 states under the same authorization as GetRoomReadState.
+	// Missing and inaccessible resources are omitted; duplicates use first-seen order.
+	BatchGetRoomReadStates(context.Context, *connect.Request[v1.BatchGetRoomReadStatesRequest]) (*connect.Response[v1.BatchGetRoomReadStatesResponse], error)
 	// Creates a new channel room in a room group. The caller must be allowed to
 	// create rooms in the target group.
 	CreateRoom(context.Context, *connect.Request[v1.CreateRoomRequest]) (*connect.Response[v1.CreateRoomResponse], error)
@@ -448,49 +568,80 @@ type RoomServiceHandler interface {
 	// Joins every unarchived room in a group that the current user can join.
 	// Already-joined and non-joinable rooms are skipped.
 	JoinRoomGroup(context.Context, *connect.Request[v1.JoinRoomGroupRequest]) (*connect.Response[v1.JoinRoomGroupResponse], error)
-	// Starts or fetches a direct-message room for the current user and the
-	// requested participant set. The caller must be allowed to start DMs.
+	// Starts a direct-message room for the current human user and the requested
+	// participant set, or fetches its existing DM. message.post is required
+	// only when the DM must be created. A valid request from a bot receives
+	// PERMISSION_DENIED and cannot use this RPC to fetch an existing DM.
 	StartDM(context.Context, *connect.Request[v1.StartDMRequest]) (*connect.Response[v1.StartDMResponse], error)
 	// Leaves the room as the current user. Direct-message and universal rooms
 	// cannot be left.
 	LeaveRoom(context.Context, *connect.Request[v1.LeaveRoomRequest]) (*connect.Response[v1.LeaveRoomResponse], error)
-	// Lists effective room members. Existing members may list their room;
-	// nonmembers of a channel room need both room.list and room.join.
-	ListMembers(context.Context, *connect.Request[v1.ListRoomMembersRequest]) (*connect.Response[v1.ListRoomMembersResponse], error)
-	// Gets one explicit member of a room. The caller must be a member of the
-	// room. Returns NOT_FOUND when the target is unknown or not a room member.
-	GetMember(context.Context, *connect.Request[v1.GetRoomMemberRequest]) (*connect.Response[v1.GetRoomMemberResponse], error)
-	// Gets explicit room member rows for multiple users. The caller must be a
-	// member of the room.
-	BatchGetMembers(context.Context, *connect.Request[v1.BatchGetRoomMembersRequest]) (*connect.Response[v1.BatchGetRoomMembersResponse], error)
-	// Adds a user as an explicit member of a channel room. The caller must be
-	// allowed to manage the room. Direct-message and universal rooms cannot be
-	// managed this way.
+	// Lists effective room member IDs in ascending ID order. Resolve user details
+	// with UserService.BatchGetUsers. Existing members and room.manage holders may
+	// list a channel room; other nonmembers need both room.list and room.join.
+	ListMembers(context.Context, *connect.Request[v1.ListMembersRequest]) (*connect.Response[v1.ListMembersResponse], error)
+	// Gets one effective member, including automatic universal membership.
+	// Channel-room members, room.manage holders, and user.manage-accounts holders
+	// may read members. Bot owners and bot.manage holders may read their target
+	// bots only. DMs require caller membership. Returns NOT_FOUND for nonmembers.
+	GetMember(context.Context, *connect.Request[v1.GetMemberRequest]) (*connect.Response[v1.GetMemberResponse], error)
+	// Gets effective member rows for the requested accounts. Uses the same
+	// authorization as GetMember; omits unknown accounts and nonmembers.
+	BatchGetMembers(context.Context, *connect.Request[v1.BatchGetMembersRequest]) (*connect.Response[v1.BatchGetMembersResponse], error)
+	// Adds an account as an explicit channel-room member. room.manage for this
+	// room or user.manage-accounts overrides the target's missing room.join.
+	// Bot owners and bot.manage holders may also add bots, but without either
+	// override the bot needs effective room.join, bounded by its owner's authority.
+	// Preserves permission grants. Bans, archived, universal, and DM rooms prevent adding.
 	AddMember(context.Context, *connect.Request[v1.AddMemberRequest]) (*connect.Response[v1.AddMemberResponse], error)
-	// Removes a user from a channel room's explicit members. The caller must be
-	// allowed to manage the room. Direct-message and universal rooms cannot be
-	// managed this way.
+	// Removes an explicit channel-room member. Requires room.manage for this room,
+	// user.manage-accounts, ownership of the target bot, or bot.manage.
+	// Removal is allowed after room.join is lost and from archived rooms.
+	// Preserves permission grants. Universal and DM membership cannot be edited.
 	RemoveMember(context.Context, *connect.Request[v1.RemoveMemberRequest]) (*connect.Response[v1.RemoveMemberResponse], error)
 	// Lists active channel room bans. The caller must be allowed to moderate room
 	// membership bans.
 	ListBans(context.Context, *connect.Request[v1.ListBansRequest]) (*connect.Response[v1.ListBansResponse], error)
 	// Lists current message-owned room attachments. Authentication and room
-	// membership are required. Returns PERMISSION_DENIED when the room is
+	// membership are required. Attachments also require message.read or a
+	// matching thread relationship with message.read-interactions. The server omits attachments from
+	// inaccessible threads. Returns PERMISSION_DENIED when the room is
 	// inaccessible to the caller.
 	ListRoomAttachments(context.Context, *connect.Request[v1.ListRoomAttachmentsRequest]) (*connect.Response[v1.ListRoomAttachmentsResponse], error)
+	// Lists current pinned messages in a channel room. Room membership plus
+	// message.read or message.read-interactions are required. The server omits
+	// pins from threads that the caller cannot read. Direct-message rooms do not
+	// support pins.
+	ListPinnedMessages(context.Context, *connect.Request[v1.ListPinnedMessagesRequest]) (*connect.Response[v1.ListPinnedMessagesResponse], error)
+	// Pins a current message. The caller must have room.manage and must be able
+	// to read the message. Repeating an existing pin is idempotent. Direct-message
+	// rooms are rejected.
+	CreatePinnedMessage(context.Context, *connect.Request[v1.CreatePinnedMessageRequest]) (*connect.Response[v1.CreatePinnedMessageResponse], error)
+	// Removes a current pin. The caller must have room.manage. Removing a
+	// missing pin is idempotent. Direct-message rooms are rejected.
+	DeletePinnedMessage(context.Context, *connect.Request[v1.DeletePinnedMessageRequest]) (*connect.Response[v1.DeletePinnedMessageResponse], error)
 	// Refreshes the current user's live-only typing indicator for a room or
 	// thread. Room membership is required; message posting permission is not.
-	UpdateTypingIndicator(context.Context, *connect.Request[v1.UpdateTypingIndicatorRequest]) (*connect.Response[v1.UpdateTypingIndicatorResponse], error)
-	// Returns one page of room timeline events, including related user data needed
-	// to render the page.
+	// Send at most once every 2 seconds while typing. After posting a message,
+	// the next typing activity can send immediately. Stop sending when typing
+	// stops; receivers clear the indicator after 6 seconds without an event.
+	RefreshTypingIndicator(context.Context, *connect.Request[v1.RefreshTypingIndicatorRequest]) (*connect.Response[v1.RefreshTypingIndicatorResponse], error)
+	// Returns one page of room timeline events, including related user data
+	// needed to render the page. Room membership is required. Reads also require
+	// message.read or message.read-interactions. The server returns only related
+	// thread roots for an interaction-scoped caller.
 	GetRoomEvents(context.Context, *connect.Request[v1.GetRoomEventsRequest]) (*connect.Response[v1.GetRoomEventsResponse], error)
 	// Returns a room timeline window centered around a specific event. Use this to
 	// open a permalink, search result, or notification target in context. Returns
 	// NOT_FOUND when the anchor event is missing or not visible in the room
-	// timeline and PERMISSION_DENIED when the room is inaccessible.
+	// timeline. Returns PERMISSION_DENIED when room membership or both read modes
+	// are missing, or when the anchor is in an unrelated thread.
 	GetRoomEventsAround(context.Context, *connect.Request[v1.GetRoomEventsAroundRequest]) (*connect.Response[v1.GetRoomEventsAroundResponse], error)
-	// Marks a room timeline as read through the supplied event. If no event is
-	// supplied, the server marks through the room's latest root event. Clients
+	// Marks a room timeline as read through the supplied event. Room membership
+	// is required. Reads also require message.read or
+	// message.read-interactions. If no event
+	// is supplied, the server marks through the latest root event that the caller
+	// can read. Clients
 	// usually call this after the user has viewed the latest visible event in the
 	// room.
 	MarkRoomAsRead(context.Context, *connect.Request[v1.MarkRoomAsReadRequest]) (*connect.Response[v1.MarkRoomAsReadResponse], error)
@@ -509,6 +660,18 @@ type RoomServiceHandler interface {
 // and JSON codecs. They also support gzip compression.
 func NewRoomServiceHandler(svc RoomServiceHandler, opts ...connect.HandlerOption) (string, http.Handler) {
 	roomServiceMethods := v1.File_chatto_api_v1_rooms_proto.Services().ByName("RoomService").Methods()
+	roomServiceGetRoomReadStateHandler := connect.NewUnaryHandler(
+		RoomServiceGetRoomReadStateProcedure,
+		svc.GetRoomReadState,
+		connect.WithSchema(roomServiceMethods.ByName("GetRoomReadState")),
+		connect.WithHandlerOptions(opts...),
+	)
+	roomServiceBatchGetRoomReadStatesHandler := connect.NewUnaryHandler(
+		RoomServiceBatchGetRoomReadStatesProcedure,
+		svc.BatchGetRoomReadStates,
+		connect.WithSchema(roomServiceMethods.ByName("BatchGetRoomReadStates")),
+		connect.WithHandlerOptions(opts...),
+	)
 	roomServiceCreateRoomHandler := connect.NewUnaryHandler(
 		RoomServiceCreateRoomProcedure,
 		svc.CreateRoom,
@@ -599,10 +762,28 @@ func NewRoomServiceHandler(svc RoomServiceHandler, opts ...connect.HandlerOption
 		connect.WithSchema(roomServiceMethods.ByName("ListRoomAttachments")),
 		connect.WithHandlerOptions(opts...),
 	)
-	roomServiceUpdateTypingIndicatorHandler := connect.NewUnaryHandler(
-		RoomServiceUpdateTypingIndicatorProcedure,
-		svc.UpdateTypingIndicator,
-		connect.WithSchema(roomServiceMethods.ByName("UpdateTypingIndicator")),
+	roomServiceListPinnedMessagesHandler := connect.NewUnaryHandler(
+		RoomServiceListPinnedMessagesProcedure,
+		svc.ListPinnedMessages,
+		connect.WithSchema(roomServiceMethods.ByName("ListPinnedMessages")),
+		connect.WithHandlerOptions(opts...),
+	)
+	roomServiceCreatePinnedMessageHandler := connect.NewUnaryHandler(
+		RoomServiceCreatePinnedMessageProcedure,
+		svc.CreatePinnedMessage,
+		connect.WithSchema(roomServiceMethods.ByName("CreatePinnedMessage")),
+		connect.WithHandlerOptions(opts...),
+	)
+	roomServiceDeletePinnedMessageHandler := connect.NewUnaryHandler(
+		RoomServiceDeletePinnedMessageProcedure,
+		svc.DeletePinnedMessage,
+		connect.WithSchema(roomServiceMethods.ByName("DeletePinnedMessage")),
+		connect.WithHandlerOptions(opts...),
+	)
+	roomServiceRefreshTypingIndicatorHandler := connect.NewUnaryHandler(
+		RoomServiceRefreshTypingIndicatorProcedure,
+		svc.RefreshTypingIndicator,
+		connect.WithSchema(roomServiceMethods.ByName("RefreshTypingIndicator")),
 		connect.WithHandlerOptions(opts...),
 	)
 	roomServiceGetRoomEventsHandler := connect.NewUnaryHandler(
@@ -637,6 +818,10 @@ func NewRoomServiceHandler(svc RoomServiceHandler, opts ...connect.HandlerOption
 	)
 	return "/chatto.api.v1.RoomService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case RoomServiceGetRoomReadStateProcedure:
+			roomServiceGetRoomReadStateHandler.ServeHTTP(w, r)
+		case RoomServiceBatchGetRoomReadStatesProcedure:
+			roomServiceBatchGetRoomReadStatesHandler.ServeHTTP(w, r)
 		case RoomServiceCreateRoomProcedure:
 			roomServiceCreateRoomHandler.ServeHTTP(w, r)
 		case RoomServiceUpdateRoomProcedure:
@@ -667,8 +852,14 @@ func NewRoomServiceHandler(svc RoomServiceHandler, opts ...connect.HandlerOption
 			roomServiceListBansHandler.ServeHTTP(w, r)
 		case RoomServiceListRoomAttachmentsProcedure:
 			roomServiceListRoomAttachmentsHandler.ServeHTTP(w, r)
-		case RoomServiceUpdateTypingIndicatorProcedure:
-			roomServiceUpdateTypingIndicatorHandler.ServeHTTP(w, r)
+		case RoomServiceListPinnedMessagesProcedure:
+			roomServiceListPinnedMessagesHandler.ServeHTTP(w, r)
+		case RoomServiceCreatePinnedMessageProcedure:
+			roomServiceCreatePinnedMessageHandler.ServeHTTP(w, r)
+		case RoomServiceDeletePinnedMessageProcedure:
+			roomServiceDeletePinnedMessageHandler.ServeHTTP(w, r)
+		case RoomServiceRefreshTypingIndicatorProcedure:
+			roomServiceRefreshTypingIndicatorHandler.ServeHTTP(w, r)
 		case RoomServiceGetRoomEventsProcedure:
 			roomServiceGetRoomEventsHandler.ServeHTTP(w, r)
 		case RoomServiceGetRoomEventsAroundProcedure:
@@ -687,6 +878,14 @@ func NewRoomServiceHandler(svc RoomServiceHandler, opts ...connect.HandlerOption
 
 // UnimplementedRoomServiceHandler returns CodeUnimplemented from all methods.
 type UnimplementedRoomServiceHandler struct{}
+
+func (UnimplementedRoomServiceHandler) GetRoomReadState(context.Context, *connect.Request[v1.GetRoomReadStateRequest]) (*connect.Response[v1.GetRoomReadStateResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("chatto.api.v1.RoomService.GetRoomReadState is not implemented"))
+}
+
+func (UnimplementedRoomServiceHandler) BatchGetRoomReadStates(context.Context, *connect.Request[v1.BatchGetRoomReadStatesRequest]) (*connect.Response[v1.BatchGetRoomReadStatesResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("chatto.api.v1.RoomService.BatchGetRoomReadStates is not implemented"))
+}
 
 func (UnimplementedRoomServiceHandler) CreateRoom(context.Context, *connect.Request[v1.CreateRoomRequest]) (*connect.Response[v1.CreateRoomResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("chatto.api.v1.RoomService.CreateRoom is not implemented"))
@@ -720,15 +919,15 @@ func (UnimplementedRoomServiceHandler) LeaveRoom(context.Context, *connect.Reque
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("chatto.api.v1.RoomService.LeaveRoom is not implemented"))
 }
 
-func (UnimplementedRoomServiceHandler) ListMembers(context.Context, *connect.Request[v1.ListRoomMembersRequest]) (*connect.Response[v1.ListRoomMembersResponse], error) {
+func (UnimplementedRoomServiceHandler) ListMembers(context.Context, *connect.Request[v1.ListMembersRequest]) (*connect.Response[v1.ListMembersResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("chatto.api.v1.RoomService.ListMembers is not implemented"))
 }
 
-func (UnimplementedRoomServiceHandler) GetMember(context.Context, *connect.Request[v1.GetRoomMemberRequest]) (*connect.Response[v1.GetRoomMemberResponse], error) {
+func (UnimplementedRoomServiceHandler) GetMember(context.Context, *connect.Request[v1.GetMemberRequest]) (*connect.Response[v1.GetMemberResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("chatto.api.v1.RoomService.GetMember is not implemented"))
 }
 
-func (UnimplementedRoomServiceHandler) BatchGetMembers(context.Context, *connect.Request[v1.BatchGetRoomMembersRequest]) (*connect.Response[v1.BatchGetRoomMembersResponse], error) {
+func (UnimplementedRoomServiceHandler) BatchGetMembers(context.Context, *connect.Request[v1.BatchGetMembersRequest]) (*connect.Response[v1.BatchGetMembersResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("chatto.api.v1.RoomService.BatchGetMembers is not implemented"))
 }
 
@@ -748,8 +947,20 @@ func (UnimplementedRoomServiceHandler) ListRoomAttachments(context.Context, *con
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("chatto.api.v1.RoomService.ListRoomAttachments is not implemented"))
 }
 
-func (UnimplementedRoomServiceHandler) UpdateTypingIndicator(context.Context, *connect.Request[v1.UpdateTypingIndicatorRequest]) (*connect.Response[v1.UpdateTypingIndicatorResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("chatto.api.v1.RoomService.UpdateTypingIndicator is not implemented"))
+func (UnimplementedRoomServiceHandler) ListPinnedMessages(context.Context, *connect.Request[v1.ListPinnedMessagesRequest]) (*connect.Response[v1.ListPinnedMessagesResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("chatto.api.v1.RoomService.ListPinnedMessages is not implemented"))
+}
+
+func (UnimplementedRoomServiceHandler) CreatePinnedMessage(context.Context, *connect.Request[v1.CreatePinnedMessageRequest]) (*connect.Response[v1.CreatePinnedMessageResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("chatto.api.v1.RoomService.CreatePinnedMessage is not implemented"))
+}
+
+func (UnimplementedRoomServiceHandler) DeletePinnedMessage(context.Context, *connect.Request[v1.DeletePinnedMessageRequest]) (*connect.Response[v1.DeletePinnedMessageResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("chatto.api.v1.RoomService.DeletePinnedMessage is not implemented"))
+}
+
+func (UnimplementedRoomServiceHandler) RefreshTypingIndicator(context.Context, *connect.Request[v1.RefreshTypingIndicatorRequest]) (*connect.Response[v1.RefreshTypingIndicatorResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("chatto.api.v1.RoomService.RefreshTypingIndicator is not implemented"))
 }
 
 func (UnimplementedRoomServiceHandler) GetRoomEvents(context.Context, *connect.Request[v1.GetRoomEventsRequest]) (*connect.Response[v1.GetRoomEventsResponse], error) {

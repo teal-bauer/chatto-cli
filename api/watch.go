@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,20 +18,16 @@ import (
 )
 
 // realtimeProtocolVersion is the only protocol version this client speaks.
-// The server accepts 0 (unspecified) or this exact value.
-const realtimeProtocolVersion = 1
+// The server rejects any other value.
+const realtimeProtocolVersion = 4
 
-// authErrorCodes are RealtimeError.code values the server sends during the
-// hello/subscribe handshake that indicate a bad or revoked credential, as
-// opposed to a protocol-level problem.
-var authErrorCodes = map[string]bool{
-	"authentication_required": true,
-}
-
-// handshakeTimeout bounds how long Watch waits for each handshake reply.
+// handshakeTimeout bounds how long Watch waits for the first frame after
+// subscribing (the server sends caught_up once recovery reaches live).
 const handshakeTimeout = 12 * time.Second
 
-// defaultHeartbeatInterval is used if the server's hello reports 0.
+// defaultHeartbeatInterval assumes the server's heartbeat cadence for stall
+// detection; protocol v4 heartbeats carry no interval. The server currently
+// heartbeats every 15s, so this over-estimates generously.
 const defaultHeartbeatInterval = 30 * time.Second
 
 // stallMultiplier: no frames at all for this many heartbeat intervals means
@@ -43,10 +40,10 @@ const stallMultiplier = 3
 const healthyConnectionThreshold = 30 * time.Second
 
 // ErrRealtimeStopped indicates the server does not want the client to
-// reconnect: a RealtimeClose with reconnect=false, or a fatal RealtimeError
-// whose code isn't a recognized auth failure (those become
-// *ErrUnauthenticated instead). Watch stops (closes its channel) rather than
-// retrying when this occurs; callers may start a new Watch to try again.
+// reconnect: a RealtimeClose with reconnect=false whose code is not a
+// recognized auth failure (those become *ErrUnauthenticated instead).
+// Watch stops (closes its channel) rather than retrying when this occurs;
+// callers may start a new Watch to try again.
 type ErrRealtimeStopped struct {
 	Code    string
 	Message string
@@ -61,7 +58,7 @@ func (e *ErrRealtimeStopped) Error() string {
 
 // retryError is an internal signal: tear down this connection and reconnect,
 // optionally overriding the exponential backoff for exactly one attempt
-// (RealtimeClose.retry_after_ms).
+// (RealtimeClose.retry_after).
 type retryError struct {
 	delay time.Duration
 }
@@ -141,9 +138,8 @@ func sendWatchEvent(ctx context.Context, ch chan<- WatchEvent, ev WatchEvent) {
 	}
 }
 
-// runRealtimeConnection runs a single WebSocket connection through the
-// hello/subscribe handshake and the event loop, until it errors or ctx is
-// cancelled.
+// runRealtimeConnection runs a single WebSocket connection: one subscribe
+// message, then the frame loop, until it errors or ctx is cancelled.
 func (c *Client) runRealtimeConnection(ctx context.Context, hydrator *Hydrator, ch chan<- WatchEvent) error {
 	// No Sec-WebSocket-Protocol offered: this is plain binary protobuf
 	// frames over a bare WebSocket, not a subprotocol.
@@ -151,7 +147,7 @@ func (c *Client) runRealtimeConnection(ctx context.Context, hydrator *Hydrator, 
 	header := http.Header{}
 	if c.token == "" && c.session != "" {
 		// Mirrors authInterceptor's cookie fallback for Connect calls: the
-		// hello frame only carries a bearer token, so session-only profiles
+		// subscribe frame only carries a bearer token, so session-only profiles
 		// need the cookie on the upgrade request itself. The server accepts
 		// this via the same authctx cookie auth it uses for Connect calls.
 		header.Set("Cookie", "chatto_session="+c.session)
@@ -176,96 +172,53 @@ func (c *Client) runRealtimeConnection(ctx context.Context, hydrator *Hydrator, 
 
 	// gorilla/websocket requires serialized writes; guard all writes with this mutex.
 	var writeMu sync.Mutex
-	writeFrame := func(frame *realtimev1.RealtimeClientFrame) error {
-		data, err := proto.Marshal(frame)
-		if err != nil {
-			return err
-		}
-		writeMu.Lock()
-		defer writeMu.Unlock()
-		return conn.WriteMessage(websocket.BinaryMessage, data)
-	}
 
-	// hello
-	hello := &realtimev1.RealtimeClientHello{ProtocolVersion: realtimeProtocolVersion}
+	// subscribe: the only application message this client ever sends.
+	subscribe := &realtimev1.RealtimeSubscribe{
+		ProtocolVersion: realtimeProtocolVersion,
+		InitialState:    realtimev1.RealtimeInitialState_REALTIME_INITIAL_STATE_LIVE_ONLY,
+	}
 	if c.token != "" {
 		token := c.token
-		hello.BearerToken = &token
+		subscribe.BearerToken = &token
 	}
-	if err := writeFrame(&realtimev1.RealtimeClientFrame{
-		Frame: &realtimev1.RealtimeClientFrame_Hello{Hello: hello},
-	}); err != nil {
-		return err
-	}
-
-	conn.SetReadDeadline(time.Now().Add(handshakeTimeout))
-	helloReply, err := recvFrame(conn)
+	data, err := proto.Marshal(subscribe)
 	if err != nil {
 		return err
 	}
-	serverHello := helloReply.GetHello()
-	if serverHello == nil {
-		if terminal := terminalFrameError(helloReply); terminal != nil {
-			return terminal
-		}
-		return fmt.Errorf("realtime handshake: expected hello, got %T", helloReply.GetFrame())
-	}
-
-	// subscribe
-	if err := writeFrame(&realtimev1.RealtimeClientFrame{
-		Frame: &realtimev1.RealtimeClientFrame_SubscribeEvents{SubscribeEvents: &realtimev1.RealtimeSubscribeEvents{}},
-	}); err != nil {
-		return err
-	}
-	conn.SetReadDeadline(time.Now().Add(handshakeTimeout))
-	subReply, err := recvFrame(conn)
+	writeMu.Lock()
+	err = conn.WriteMessage(websocket.BinaryMessage, data)
+	writeMu.Unlock()
 	if err != nil {
 		return err
 	}
-	if subReply.GetSubscribed() == nil {
-		if terminal := terminalFrameError(subReply); terminal != nil {
-			return terminal
-		}
-		return fmt.Errorf("realtime handshake: expected subscribed, got %T", subReply.GetFrame())
-	}
 
-	heartbeatInterval := time.Duration(serverHello.GetHeartbeatIntervalSeconds()) * time.Second
-	if heartbeatInterval <= 0 {
-		heartbeatInterval = defaultHeartbeatInterval
-	}
-	stallTimeout := heartbeatInterval * stallMultiplier
+	// No client-side keepalive: protocol v4 forbids further client messages,
+	// and the server heartbeats on its own cadence.
+	stallTimeout := defaultHeartbeatInterval * stallMultiplier
 
-	// realtime.proto only defines a client-initiated ping (server replies
-	// with pong); there is no server-to-client ping to reply to. Send our
-	// own keepalive ping on the heartbeat cadence; pong and the server's own
-	// periodic heartbeat frame both count as liveness below.
-	go func() {
-		ticker := time.NewTicker(heartbeatInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-connCtx.Done():
-				return
-			case <-ticker.C:
-				_ = writeFrame(&realtimev1.RealtimeClientFrame{
-					Frame: &realtimev1.RealtimeClientFrame_Ping{Ping: &realtimev1.RealtimePing{}},
-				})
-			}
-		}
-	}()
-
+	// The first frame after subscribe is due within the handshake window;
+	// once caught_up arrives the looser stall deadline applies.
+	firstFrame := true
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		conn.SetReadDeadline(time.Now().Add(stallTimeout))
+		if firstFrame {
+			conn.SetReadDeadline(time.Now().Add(handshakeTimeout))
+		} else {
+			conn.SetReadDeadline(time.Now().Add(stallTimeout))
+		}
 		frame, err := recvFrame(conn)
 		if err != nil {
 			return err
 		}
 
 		switch f := frame.GetFrame().(type) {
+		case *realtimev1.RealtimeServerFrame_CaughtUp:
+			firstFrame = false
 		case *realtimev1.RealtimeServerFrame_Event:
+			firstFrame = false
 			hydrated, herr := hydrator.Hydrate(ctx, f.Event)
 			if herr != nil {
 				sendWatchEvent(ctx, ch, WatchEvent{Err: herr})
@@ -277,10 +230,8 @@ func (c *Client) runRealtimeConnection(ctx context.Context, hydrator *Hydrator, 
 			sendWatchEvent(ctx, ch, WatchEvent{Event: hydrated})
 		case *realtimev1.RealtimeServerFrame_Heartbeat:
 			// Liveness only; never surfaced to callers.
-		case *realtimev1.RealtimeServerFrame_Pong:
-			// Liveness only; reply to our own keepalive ping.
-		case *realtimev1.RealtimeServerFrame_Error:
-			return errorFromFrame(f.Error)
+		case *realtimev1.RealtimeServerFrame_Snapshot:
+			// We subscribe live-only, so no snapshot is expected; discard if one arrives.
 		case *realtimev1.RealtimeServerFrame_Close:
 			return closeFromFrame(f.Close)
 		default:
@@ -289,39 +240,28 @@ func (c *Client) runRealtimeConnection(ctx context.Context, hydrator *Hydrator, 
 	}
 }
 
-// terminalFrameError checks a handshake reply for an error/close frame,
-// returning the mapped error, or nil if frame is neither.
-func terminalFrameError(frame *realtimev1.RealtimeServerFrame) error {
-	if e := frame.GetError(); e != nil {
-		return errorFromFrame(e)
-	}
-	if cl := frame.GetClose(); cl != nil {
-		return closeFromFrame(cl)
-	}
-	return nil
-}
-
-func errorFromFrame(e *realtimev1.RealtimeError) error {
-	if authErrorCodes[e.GetCode()] {
-		return &ErrUnauthenticated{ChattoError: &ChattoError{Code: connect.CodeUnauthenticated, Message: e.GetMessage()}}
-	}
-	if e.GetFatal() {
-		return &ErrRealtimeStopped{Code: e.GetCode(), Message: e.GetMessage()}
-	}
-	// No currently-emitted server error is non-fatal, but the proto allows
-	// it in principle; treat it as transient and reconnect.
-	return &retryError{}
-}
-
+// closeFromFrame maps a server close frame to a Watch error: auth-terminal
+// codes become *ErrUnauthenticated regardless of the reconnect flag (the
+// credential is dead, so reconnecting would only fail the handshake again),
+// reconnect=false becomes *ErrRealtimeStopped, and everything else retries
+// after the server's suggested delay when present.
 func closeFromFrame(cl *realtimev1.RealtimeClose) error {
+	switch cl.GetCode() {
+	case realtimev1.RealtimeCloseCode_REALTIME_CLOSE_CODE_AUTHENTICATION_REQUIRED,
+		realtimev1.RealtimeCloseCode_REALTIME_CLOSE_CODE_SESSION_TERMINATED:
+		return &ErrUnauthenticated{ChattoError: &ChattoError{Code: connect.CodeUnauthenticated, Message: cl.GetMessage()}}
+	}
 	if !cl.GetReconnect() {
-		return &ErrRealtimeStopped{Code: cl.GetCode(), Message: cl.GetMessage()}
+		return &ErrRealtimeStopped{Code: closeCodeString(cl.GetCode()), Message: cl.GetMessage()}
 	}
-	var delay time.Duration
-	if cl.GetRetryAfterMs() > 0 {
-		delay = time.Duration(cl.GetRetryAfterMs()) * time.Millisecond
-	}
-	return &retryError{delay: delay}
+	return &retryError{delay: cl.GetRetryAfter().AsDuration()}
+}
+
+// closeCodeString renders a RealtimeCloseCode as its snake_case name without
+// the enum-name prefix (REALTIME_CLOSE_CODE_INVALID_REQUEST ->
+// invalid_request), matching the wire-level close codes older releases sent.
+func closeCodeString(code realtimev1.RealtimeCloseCode) string {
+	return strings.ToLower(strings.TrimPrefix(code.String(), "REALTIME_CLOSE_CODE_"))
 }
 
 func recvFrame(conn *websocket.Conn) (*realtimev1.RealtimeServerFrame, error) {

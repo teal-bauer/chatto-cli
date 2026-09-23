@@ -117,14 +117,12 @@ func (c *Client) JoinRoom(ctx context.Context, roomID string) (*apiv1.Room, erro
 // LeaveRoom removes the current user from a room. Returns a *ChattoError
 // (typically CodeFailedPrecondition) for DM and universal rooms, which
 // cannot be left; callers should catch it to message the user rather than
-// treat it as unexpected.
-func (c *Client) LeaveRoom(ctx context.Context, roomID string) (bool, error) {
+// treat it as unexpected. Success is an empty response: absence of error
+// means the room was left.
+func (c *Client) LeaveRoom(ctx context.Context, roomID string) error {
 	req := &apiv1.LeaveRoomRequest{RoomId: roomID}
-	resp, err := c.room.LeaveRoom(ctx, connect.NewRequest(req))
-	if err != nil {
-		return false, mapError(err)
-	}
-	return resp.Msg.GetLeft(), nil
+	_, err := c.room.LeaveRoom(ctx, connect.NewRequest(req))
+	return mapError(err)
 }
 
 // ListUsers searches the server's member directory.
@@ -147,12 +145,12 @@ func (c *Client) BatchGetUsers(ctx context.Context, userIDs []string) ([]*apiv1.
 	return resp.Msg.GetUsers(), nil
 }
 
-// UpdatePresence sets the current user's live presence status. This is
+// SetPresence sets the current user's live presence status. This is
 // transient -- callers must keep refreshing on an interval to stay "online".
 // PRESENCE_STATUS_OFFLINE cannot be set explicitly; the server rejects it.
-func (c *Client) UpdatePresence(ctx context.Context, status apiv1.PresenceStatus) error {
-	req := &apiv1.UpdatePresenceRequest{Status: status}
-	_, err := c.account.UpdatePresence(ctx, connect.NewRequest(req))
+func (c *Client) SetPresence(ctx context.Context, status apiv1.PresenceStatus) error {
+	req := &apiv1.SetPresenceRequest{Status: status}
+	_, err := c.account.SetPresence(ctx, connect.NewRequest(req))
 	return mapError(err)
 }
 
@@ -171,13 +169,13 @@ func (c *Client) RemoveReaction(ctx context.Context, roomID, messageEventID, emo
 	return mapError(err)
 }
 
-// UpdateTypingIndicator refreshes the live-only typing indicator for a room
+// RefreshTypingIndicator refreshes the live-only typing indicator for a room
 // or thread (pass "" for threadRootEventID to indicate the room itself). It
 // expires on its own via a server-side TTL; there is no RPC to clear it
 // early.
-func (c *Client) UpdateTypingIndicator(ctx context.Context, roomID, threadRootEventID string) error {
-	req := &apiv1.UpdateTypingIndicatorRequest{RoomId: roomID, ThreadRootEventId: threadRootEventID}
-	_, err := c.room.UpdateTypingIndicator(ctx, connect.NewRequest(req))
+func (c *Client) RefreshTypingIndicator(ctx context.Context, roomID, threadRootEventID string) error {
+	req := &apiv1.RefreshTypingIndicatorRequest{RoomId: roomID, ThreadRootEventId: threadRootEventID}
+	_, err := c.room.RefreshTypingIndicator(ctx, connect.NewRequest(req))
 	return mapError(err)
 }
 

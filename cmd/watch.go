@@ -114,13 +114,13 @@ func runWatch(cmd *cobra.Command, args []string) error {
 			continue
 		}
 
-		roomID := envelopeRoomID(wev.Event.Envelope)
+		roomID := eventRoomID(wev.Event.Event)
 		if filterRoom != "" && roomID != "" && roomID != filterRoom {
 			continue
 		}
 
 		if flagJSON {
-			printProtoJSON(wev.Event.Envelope)
+			printProtoJSON(wev.Event.Event)
 			continue
 		}
 
@@ -149,18 +149,17 @@ func watchTerminalErr(err error) error {
 	return nil
 }
 
-// envelopeRoomID extracts the room ID from whichever event payload is set on
+// eventRoomID extracts the room ID from whichever event payload is set on
 // env's `event` oneof, or "" for event kinds with no room_id field
-// (server_updated, session_terminated and the like) or where it's unset.
+// (server changes, viewer-only signals and the like) or where it's unset.
 //
 // This is done via protoreflect rather than an explicit case per oneof
-// variant: realtime.proto carries room_id on a couple dozen event kinds
-// (some via a plain `string room_id`, some via `optional string room_id`),
-// and a hardcoded switch silently stops filtering newly added room-bearing
-// event kinds correctly (they'd fall through to "", which --room's filter
-// treats as "unscoped" and lets through unfiltered). Reflection keeps this
-// correct as realtime.proto grows.
-func envelopeRoomID(env *realtimev1.RealtimeEventEnvelope) string {
+// variant: the realtime protocol carries room_id on a couple dozen event
+// kinds, and a hardcoded switch silently stops filtering newly added
+// room-bearing event kinds correctly (they'd fall through to "", which
+// --room's filter treats as "unscoped" and lets through unfiltered).
+// Reflection keeps this correct as the event catalogue grows.
+func eventRoomID(env *realtimev1.RealtimeEvent) string {
 	if env == nil {
 		return ""
 	}
@@ -186,9 +185,9 @@ func envelopeRoomID(env *realtimev1.RealtimeEventEnvelope) string {
 
 // renderHydrated renders one hydrated realtime event (from Client.Watch).
 func (r *eventRenderer) renderHydrated(hv *api.HydratedEvent) {
-	env := hv.Envelope
+	env := hv.Event
 	ts := formatTimestamp(env.GetCreatedAt())
-	roomID := envelopeRoomID(env)
+	roomID := eventRoomID(env)
 	actor := displayName(hv.Actor, env.GetActorId())
 
 	switch hv.EventName {

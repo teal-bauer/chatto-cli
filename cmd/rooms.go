@@ -130,7 +130,7 @@ var leaveRoomCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if _, err := c.LeaveRoom(ctx, roomID); err != nil {
+		if err := c.LeaveRoom(ctx, roomID); err != nil {
 			return leaveRoomErr(err)
 		}
 		fmt.Printf("Left %s.\n", args[0])

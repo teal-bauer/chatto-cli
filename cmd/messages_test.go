@@ -147,141 +147,138 @@ func TestDisplayName(t *testing.T) {
 	}
 }
 
-func TestEnvelopeRoomID(t *testing.T) {
+func TestEventRoomID(t *testing.T) {
 	cases := []struct {
 		name string
-		env  *realtimev1.RealtimeEventEnvelope
+		env  *realtimev1.RealtimeEvent
 		want string
 	}{
 		{
 			name: "message_posted carries its room id",
-			env: &realtimev1.RealtimeEventEnvelope{
-				Event: &realtimev1.RealtimeEventEnvelope_MessagePosted{
-					MessagePosted: &realtimev1.RealtimeMessagePostedEvent{RoomId: "room-1"},
+			env: &realtimev1.RealtimeEvent{
+				Event: &realtimev1.RealtimeEvent_MessagePosted{
+					MessagePosted: &realtimev1.MessagePostedEvent{RoomId: "room-1"},
 				},
 			},
 			want: "room-1",
 		},
 		{
 			name: "user_left_room carries its room id",
-			env: &realtimev1.RealtimeEventEnvelope{
-				Event: &realtimev1.RealtimeEventEnvelope_UserLeftRoom{
-					UserLeftRoom: &realtimev1.RealtimeRoomEvent{RoomId: "room-2"},
+			env: &realtimev1.RealtimeEvent{
+				Event: &realtimev1.RealtimeEvent_UserLeftRoom{
+					UserLeftRoom: &realtimev1.UserLeftRoomEvent{RoomId: "room-2"},
 				},
 			},
 			want: "room-2",
 		},
 		{
-			name: "event kinds with no room (e.g. session_terminated) resolve to empty",
-			env: &realtimev1.RealtimeEventEnvelope{
-				Event: &realtimev1.RealtimeEventEnvelope_SessionTerminated{
-					SessionTerminated: &realtimev1.RealtimeSessionTerminatedEvent{},
+			name: "event kinds with no room (e.g. viewer_permissions_changed) resolve to empty",
+			env: &realtimev1.RealtimeEvent{
+				Event: &realtimev1.RealtimeEvent_ViewerPermissionsChanged{
+					ViewerPermissionsChanged: &realtimev1.ViewerPermissionsChangedEvent{},
 				},
 			},
 			want: "",
 		},
 		{
 			name: "thread_created carries its room id (previously unhandled)",
-			env: &realtimev1.RealtimeEventEnvelope{
-				Event: &realtimev1.RealtimeEventEnvelope_ThreadCreated{
-					ThreadCreated: &realtimev1.RealtimeThreadCreatedEvent{RoomId: "room-3"},
+			env: &realtimev1.RealtimeEvent{
+				Event: &realtimev1.RealtimeEvent_ThreadCreated{
+					ThreadCreated: &realtimev1.ThreadCreatedEvent{RoomId: "room-3"},
 				},
 			},
 			want: "room-3",
 		},
 		{
 			name: "room_universal_changed carries its room id (previously unhandled)",
-			env: &realtimev1.RealtimeEventEnvelope{
-				Event: &realtimev1.RealtimeEventEnvelope_RoomUniversalChanged{
-					RoomUniversalChanged: &realtimev1.RealtimeRoomUniversalChangedEvent{RoomId: "room-4"},
+			env: &realtimev1.RealtimeEvent{
+				Event: &realtimev1.RealtimeEvent_RoomUniversalChanged{
+					RoomUniversalChanged: &realtimev1.RoomUniversalChangedEvent{RoomId: "room-4"},
 				},
 			},
 			want: "room-4",
 		},
 		{
-			name: "room_marked_as_read carries its room id (previously unhandled)",
-			env: &realtimev1.RealtimeEventEnvelope{
-				Event: &realtimev1.RealtimeEventEnvelope_RoomMarkedAsRead{
-					RoomMarkedAsRead: &realtimev1.RealtimeRoomMarkedAsReadEvent{RoomId: "room-5"},
+			name: "room_read_state_changed carries its room id (previously unhandled)",
+			env: &realtimev1.RealtimeEvent{
+				Event: &realtimev1.RealtimeEvent_RoomReadStateChanged{
+					RoomReadStateChanged: &realtimev1.RoomReadStateChangedEvent{RoomId: "room-5"},
 				},
 			},
 			want: "room-5",
 		},
 		{
-			name: "notification_created with room_id set (previously unhandled, optional string)",
-			env: &realtimev1.RealtimeEventEnvelope{
-				Event: &realtimev1.RealtimeEventEnvelope_NotificationCreated{
-					NotificationCreated: &realtimev1.RealtimeNotificationCreatedEvent{
-						NotificationId: "notif-1",
-						RoomId:         proto.String("room-6"),
+			name: "notification_unread_state_changed with room_id set (previously unhandled)",
+			env: &realtimev1.RealtimeEvent{
+				Event: &realtimev1.RealtimeEvent_NotificationUnreadStateChanged{
+					NotificationUnreadStateChanged: &realtimev1.NotificationUnreadStateChangedEvent{
+						RoomId: "room-6",
 					},
 				},
 			},
 			want: "room-6",
 		},
 		{
-			name: "notification_created with room_id unset resolves to empty (optional string, absent)",
-			env: &realtimev1.RealtimeEventEnvelope{
-				Event: &realtimev1.RealtimeEventEnvelope_NotificationCreated{
-					NotificationCreated: &realtimev1.RealtimeNotificationCreatedEvent{
-						NotificationId: "notif-2",
-					},
+			name: "presence_changed has no room_id field at all",
+			env: &realtimev1.RealtimeEvent{
+				Event: &realtimev1.RealtimeEvent_PresenceChanged{
+					PresenceChanged: &realtimev1.PresenceChangedEvent{},
 				},
 			},
 			want: "",
 		},
 		{
-			name: "mention_notification carries its room id (previously unhandled)",
-			env: &realtimev1.RealtimeEventEnvelope{
-				Event: &realtimev1.RealtimeEventEnvelope_MentionNotification{
-					MentionNotification: &realtimev1.RealtimeMentionNotificationEvent{RoomId: "room-7"},
+			name: "message_pinned carries its room id (previously unhandled)",
+			env: &realtimev1.RealtimeEvent{
+				Event: &realtimev1.RealtimeEvent_MessagePinned{
+					MessagePinned: &realtimev1.MessagePinnedEvent{RoomId: "room-7"},
 				},
 			},
 			want: "room-7",
 		},
 		{
-			name: "call_started carries its room id (previously unhandled)",
-			env: &realtimev1.RealtimeEventEnvelope{
-				Event: &realtimev1.RealtimeEventEnvelope_CallStarted{
-					CallStarted: &realtimev1.RealtimeCallEvent{RoomId: "room-8"},
+			name: "voice_call_started carries its room id (previously unhandled)",
+			env: &realtimev1.RealtimeEvent{
+				Event: &realtimev1.RealtimeEvent_VoiceCallStarted{
+					VoiceCallStarted: &realtimev1.VoiceCallStartedEvent{RoomId: "room-8"},
 				},
 			},
 			want: "room-8",
 		},
 		{
-			name: "asset_processing_started carries its room id (previously unhandled, optional string)",
-			env: &realtimev1.RealtimeEventEnvelope{
-				Event: &realtimev1.RealtimeEventEnvelope_AssetProcessingStarted{
-					AssetProcessingStarted: &realtimev1.RealtimeAssetProcessingEvent{RoomId: proto.String("room-9")},
+			name: "asset_processing_started carries its room id (previously unhandled)",
+			env: &realtimev1.RealtimeEvent{
+				Event: &realtimev1.RealtimeEvent_AssetProcessingStarted{
+					AssetProcessingStarted: &realtimev1.AssetProcessingStartedEvent{RoomId: "room-9"},
 				},
 			},
 			want: "room-9",
 		},
 		{
-			name: "asset_deleted carries its room id (previously unhandled, optional string)",
-			env: &realtimev1.RealtimeEventEnvelope{
-				Event: &realtimev1.RealtimeEventEnvelope_AssetDeleted{
-					AssetDeleted: &realtimev1.RealtimeAssetDeletedEvent{RoomId: proto.String("room-10")},
+			name: "asset_deleted carries its room id (previously unhandled)",
+			env: &realtimev1.RealtimeEvent{
+				Event: &realtimev1.RealtimeEvent_AssetDeleted{
+					AssetDeleted: &realtimev1.AssetDeletedEvent{RoomId: "room-10"},
 				},
 			},
 			want: "room-10",
 		},
 		{
-			name: "server_updated has no room_id field at all",
-			env: &realtimev1.RealtimeEventEnvelope{
-				Event: &realtimev1.RealtimeEventEnvelope_ServerUpdated{
-					ServerUpdated: &realtimev1.RealtimeServerUpdatedEvent{Name: "test"},
+			name: "server_profile_changed has no room_id field at all",
+			env: &realtimev1.RealtimeEvent{
+				Event: &realtimev1.RealtimeEvent_ServerProfileChanged{
+					ServerProfileChanged: &realtimev1.ServerProfileChangedEvent{},
 				},
 			},
 			want: "",
 		},
 		{
 			name: "no event set",
-			env:  &realtimev1.RealtimeEventEnvelope{},
+			env:  &realtimev1.RealtimeEvent{},
 			want: "",
 		},
 		{
-			name: "nil envelope",
+			name: "nil event",
 			env:  nil,
 			want: "",
 		},
@@ -289,8 +286,8 @@ func TestEnvelopeRoomID(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := envelopeRoomID(tc.env); got != tc.want {
-				t.Errorf("envelopeRoomID() = %q, want %q", got, tc.want)
+			if got := eventRoomID(tc.env); got != tc.want {
+				t.Errorf("eventRoomID() = %q, want %q", got, tc.want)
 			}
 		})
 	}

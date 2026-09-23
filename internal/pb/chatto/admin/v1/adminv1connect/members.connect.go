@@ -51,9 +51,9 @@ const (
 	// AdminUserServiceUpdateUserProcedure is the fully-qualified name of the AdminUserService's
 	// UpdateUser RPC.
 	AdminUserServiceUpdateUserProcedure = "/chatto.admin.v1.AdminUserService/UpdateUser"
-	// AdminUserServiceUpdateUserPasswordProcedure is the fully-qualified name of the AdminUserService's
-	// UpdateUserPassword RPC.
-	AdminUserServiceUpdateUserPasswordProcedure = "/chatto.admin.v1.AdminUserService/UpdateUserPassword"
+	// AdminUserServiceChangeUserPasswordProcedure is the fully-qualified name of the AdminUserService's
+	// ChangeUserPassword RPC.
+	AdminUserServiceChangeUserPasswordProcedure = "/chatto.admin.v1.AdminUserService/ChangeUserPassword"
 	// AdminUserServiceClearUsernameCooldownProcedure is the fully-qualified name of the
 	// AdminUserService's ClearUsernameCooldown RPC.
 	AdminUserServiceClearUsernameCooldownProcedure = "/chatto.admin.v1.AdminUserService/ClearUsernameCooldown"
@@ -72,23 +72,25 @@ type AdminUserServiceClient interface {
 	GetMember(context.Context, *connect.Request[v1.GetMemberRequest]) (*connect.Response[v1.GetMemberResponse], error)
 	// Gets server member rows for multiple users. Requires admin.view-users.
 	BatchGetMembers(context.Context, *connect.Request[v1.BatchGetMembersRequest]) (*connect.Response[v1.BatchGetMembersResponse], error)
-	// Assigns a role to a user. Requires role.assign.
+	// Assigns a role to a user. Requires role.assign, and non-owner callers may
+	// only assign roles whose granted authority they already possess.
 	AssignRole(context.Context, *connect.Request[v1.AssignRoleRequest]) (*connect.Response[v1.AssignRoleResponse], error)
-	// Revokes a role from a user. Requires role.assign.
+	// Revokes a role from a user. Requires role.assign, and non-owner callers may
+	// only revoke roles whose permission decisions are within their authority.
 	RevokeRole(context.Context, *connect.Request[v1.RevokeRoleRequest]) (*connect.Response[v1.RevokeRoleResponse], error)
-	// Updates another user's login and/or display name as an admin action.
-	// Requires user.manage-accounts; the caller cannot target their own account.
+	// Updates a human user's login and/or display name without applying the
+	// username-change cooldown. Requires user.manage-accounts, including when
+	// the caller targets their own account. Preserves the cooldown timestamp.
 	UpdateUser(context.Context, *connect.Request[v1.UpdateUserRequest]) (*connect.Response[v1.UpdateUserResponse], error)
 	// Updates another user's password as an admin action. Requires
 	// user.manage-accounts and a fresh credential for the caller; the caller
 	// cannot target their own account.
-	UpdateUserPassword(context.Context, *connect.Request[v1.UpdateUserPasswordRequest]) (*connect.Response[v1.UpdateUserPasswordResponse], error)
+	ChangeUserPassword(context.Context, *connect.Request[v1.ChangeUserPasswordRequest]) (*connect.Response[v1.ChangeUserPasswordResponse], error)
 	// Clears the target user's self-service username-change cooldown. Requires
-	// user.manage-accounts.
+	// user.manage-accounts, including when the caller targets their own account.
 	ClearUsernameCooldown(context.Context, *connect.Request[v1.ClearUsernameCooldownRequest]) (*connect.Response[v1.ClearUsernameCooldownResponse], error)
 	// Deletes a user account as an admin action. Requires user.delete-any for
-	// other users, user.delete-self for the caller, and a fresh credential for
-	// the caller.
+	// other users or user.delete-self for the caller.
 	DeleteUser(context.Context, *connect.Request[v1.DeleteUserRequest]) (*connect.Response[v1.DeleteUserResponse], error)
 }
 
@@ -139,10 +141,10 @@ func NewAdminUserServiceClient(httpClient connect.HTTPClient, baseURL string, op
 			connect.WithSchema(adminUserServiceMethods.ByName("UpdateUser")),
 			connect.WithClientOptions(opts...),
 		),
-		updateUserPassword: connect.NewClient[v1.UpdateUserPasswordRequest, v1.UpdateUserPasswordResponse](
+		changeUserPassword: connect.NewClient[v1.ChangeUserPasswordRequest, v1.ChangeUserPasswordResponse](
 			httpClient,
-			baseURL+AdminUserServiceUpdateUserPasswordProcedure,
-			connect.WithSchema(adminUserServiceMethods.ByName("UpdateUserPassword")),
+			baseURL+AdminUserServiceChangeUserPasswordProcedure,
+			connect.WithSchema(adminUserServiceMethods.ByName("ChangeUserPassword")),
 			connect.WithClientOptions(opts...),
 		),
 		clearUsernameCooldown: connect.NewClient[v1.ClearUsernameCooldownRequest, v1.ClearUsernameCooldownResponse](
@@ -168,7 +170,7 @@ type adminUserServiceClient struct {
 	assignRole            *connect.Client[v1.AssignRoleRequest, v1.AssignRoleResponse]
 	revokeRole            *connect.Client[v1.RevokeRoleRequest, v1.RevokeRoleResponse]
 	updateUser            *connect.Client[v1.UpdateUserRequest, v1.UpdateUserResponse]
-	updateUserPassword    *connect.Client[v1.UpdateUserPasswordRequest, v1.UpdateUserPasswordResponse]
+	changeUserPassword    *connect.Client[v1.ChangeUserPasswordRequest, v1.ChangeUserPasswordResponse]
 	clearUsernameCooldown *connect.Client[v1.ClearUsernameCooldownRequest, v1.ClearUsernameCooldownResponse]
 	deleteUser            *connect.Client[v1.DeleteUserRequest, v1.DeleteUserResponse]
 }
@@ -203,9 +205,9 @@ func (c *adminUserServiceClient) UpdateUser(ctx context.Context, req *connect.Re
 	return c.updateUser.CallUnary(ctx, req)
 }
 
-// UpdateUserPassword calls chatto.admin.v1.AdminUserService.UpdateUserPassword.
-func (c *adminUserServiceClient) UpdateUserPassword(ctx context.Context, req *connect.Request[v1.UpdateUserPasswordRequest]) (*connect.Response[v1.UpdateUserPasswordResponse], error) {
-	return c.updateUserPassword.CallUnary(ctx, req)
+// ChangeUserPassword calls chatto.admin.v1.AdminUserService.ChangeUserPassword.
+func (c *adminUserServiceClient) ChangeUserPassword(ctx context.Context, req *connect.Request[v1.ChangeUserPasswordRequest]) (*connect.Response[v1.ChangeUserPasswordResponse], error) {
+	return c.changeUserPassword.CallUnary(ctx, req)
 }
 
 // ClearUsernameCooldown calls chatto.admin.v1.AdminUserService.ClearUsernameCooldown.
@@ -228,23 +230,25 @@ type AdminUserServiceHandler interface {
 	GetMember(context.Context, *connect.Request[v1.GetMemberRequest]) (*connect.Response[v1.GetMemberResponse], error)
 	// Gets server member rows for multiple users. Requires admin.view-users.
 	BatchGetMembers(context.Context, *connect.Request[v1.BatchGetMembersRequest]) (*connect.Response[v1.BatchGetMembersResponse], error)
-	// Assigns a role to a user. Requires role.assign.
+	// Assigns a role to a user. Requires role.assign, and non-owner callers may
+	// only assign roles whose granted authority they already possess.
 	AssignRole(context.Context, *connect.Request[v1.AssignRoleRequest]) (*connect.Response[v1.AssignRoleResponse], error)
-	// Revokes a role from a user. Requires role.assign.
+	// Revokes a role from a user. Requires role.assign, and non-owner callers may
+	// only revoke roles whose permission decisions are within their authority.
 	RevokeRole(context.Context, *connect.Request[v1.RevokeRoleRequest]) (*connect.Response[v1.RevokeRoleResponse], error)
-	// Updates another user's login and/or display name as an admin action.
-	// Requires user.manage-accounts; the caller cannot target their own account.
+	// Updates a human user's login and/or display name without applying the
+	// username-change cooldown. Requires user.manage-accounts, including when
+	// the caller targets their own account. Preserves the cooldown timestamp.
 	UpdateUser(context.Context, *connect.Request[v1.UpdateUserRequest]) (*connect.Response[v1.UpdateUserResponse], error)
 	// Updates another user's password as an admin action. Requires
 	// user.manage-accounts and a fresh credential for the caller; the caller
 	// cannot target their own account.
-	UpdateUserPassword(context.Context, *connect.Request[v1.UpdateUserPasswordRequest]) (*connect.Response[v1.UpdateUserPasswordResponse], error)
+	ChangeUserPassword(context.Context, *connect.Request[v1.ChangeUserPasswordRequest]) (*connect.Response[v1.ChangeUserPasswordResponse], error)
 	// Clears the target user's self-service username-change cooldown. Requires
-	// user.manage-accounts.
+	// user.manage-accounts, including when the caller targets their own account.
 	ClearUsernameCooldown(context.Context, *connect.Request[v1.ClearUsernameCooldownRequest]) (*connect.Response[v1.ClearUsernameCooldownResponse], error)
 	// Deletes a user account as an admin action. Requires user.delete-any for
-	// other users, user.delete-self for the caller, and a fresh credential for
-	// the caller.
+	// other users or user.delete-self for the caller.
 	DeleteUser(context.Context, *connect.Request[v1.DeleteUserRequest]) (*connect.Response[v1.DeleteUserResponse], error)
 }
 
@@ -291,10 +295,10 @@ func NewAdminUserServiceHandler(svc AdminUserServiceHandler, opts ...connect.Han
 		connect.WithSchema(adminUserServiceMethods.ByName("UpdateUser")),
 		connect.WithHandlerOptions(opts...),
 	)
-	adminUserServiceUpdateUserPasswordHandler := connect.NewUnaryHandler(
-		AdminUserServiceUpdateUserPasswordProcedure,
-		svc.UpdateUserPassword,
-		connect.WithSchema(adminUserServiceMethods.ByName("UpdateUserPassword")),
+	adminUserServiceChangeUserPasswordHandler := connect.NewUnaryHandler(
+		AdminUserServiceChangeUserPasswordProcedure,
+		svc.ChangeUserPassword,
+		connect.WithSchema(adminUserServiceMethods.ByName("ChangeUserPassword")),
 		connect.WithHandlerOptions(opts...),
 	)
 	adminUserServiceClearUsernameCooldownHandler := connect.NewUnaryHandler(
@@ -323,8 +327,8 @@ func NewAdminUserServiceHandler(svc AdminUserServiceHandler, opts ...connect.Han
 			adminUserServiceRevokeRoleHandler.ServeHTTP(w, r)
 		case AdminUserServiceUpdateUserProcedure:
 			adminUserServiceUpdateUserHandler.ServeHTTP(w, r)
-		case AdminUserServiceUpdateUserPasswordProcedure:
-			adminUserServiceUpdateUserPasswordHandler.ServeHTTP(w, r)
+		case AdminUserServiceChangeUserPasswordProcedure:
+			adminUserServiceChangeUserPasswordHandler.ServeHTTP(w, r)
 		case AdminUserServiceClearUsernameCooldownProcedure:
 			adminUserServiceClearUsernameCooldownHandler.ServeHTTP(w, r)
 		case AdminUserServiceDeleteUserProcedure:
@@ -362,8 +366,8 @@ func (UnimplementedAdminUserServiceHandler) UpdateUser(context.Context, *connect
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("chatto.admin.v1.AdminUserService.UpdateUser is not implemented"))
 }
 
-func (UnimplementedAdminUserServiceHandler) UpdateUserPassword(context.Context, *connect.Request[v1.UpdateUserPasswordRequest]) (*connect.Response[v1.UpdateUserPasswordResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("chatto.admin.v1.AdminUserService.UpdateUserPassword is not implemented"))
+func (UnimplementedAdminUserServiceHandler) ChangeUserPassword(context.Context, *connect.Request[v1.ChangeUserPasswordRequest]) (*connect.Response[v1.ChangeUserPasswordResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("chatto.admin.v1.AdminUserService.ChangeUserPassword is not implemented"))
 }
 
 func (UnimplementedAdminUserServiceHandler) ClearUsernameCooldown(context.Context, *connect.Request[v1.ClearUsernameCooldownRequest]) (*connect.Response[v1.ClearUsernameCooldownResponse], error) {

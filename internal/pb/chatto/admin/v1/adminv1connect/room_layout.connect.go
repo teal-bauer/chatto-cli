@@ -33,6 +33,12 @@ const (
 // reflection-formatted method names, remove the leading slash and convert the remaining slash to a
 // period.
 const (
+	// AdminRoomLayoutServiceGetRoomProcedure is the fully-qualified name of the
+	// AdminRoomLayoutService's GetRoom RPC.
+	AdminRoomLayoutServiceGetRoomProcedure = "/chatto.admin.v1.AdminRoomLayoutService/GetRoom"
+	// AdminRoomLayoutServiceGetRoomGroupProcedure is the fully-qualified name of the
+	// AdminRoomLayoutService's GetRoomGroup RPC.
+	AdminRoomLayoutServiceGetRoomGroupProcedure = "/chatto.admin.v1.AdminRoomLayoutService/GetRoomGroup"
 	// AdminRoomLayoutServiceListRoomGroupsProcedure is the fully-qualified name of the
 	// AdminRoomLayoutService's ListRoomGroups RPC.
 	AdminRoomLayoutServiceListRoomGroupsProcedure = "/chatto.admin.v1.AdminRoomLayoutService/ListRoomGroups"
@@ -48,12 +54,18 @@ const (
 	// AdminRoomLayoutServiceReorderRoomGroupsProcedure is the fully-qualified name of the
 	// AdminRoomLayoutService's ReorderRoomGroups RPC.
 	AdminRoomLayoutServiceReorderRoomGroupsProcedure = "/chatto.admin.v1.AdminRoomLayoutService/ReorderRoomGroups"
+	// AdminRoomLayoutServiceMoveRoomGroupProcedure is the fully-qualified name of the
+	// AdminRoomLayoutService's MoveRoomGroup RPC.
+	AdminRoomLayoutServiceMoveRoomGroupProcedure = "/chatto.admin.v1.AdminRoomLayoutService/MoveRoomGroup"
 	// AdminRoomLayoutServiceMoveRoomToGroupProcedure is the fully-qualified name of the
 	// AdminRoomLayoutService's MoveRoomToGroup RPC.
 	AdminRoomLayoutServiceMoveRoomToGroupProcedure = "/chatto.admin.v1.AdminRoomLayoutService/MoveRoomToGroup"
 	// AdminRoomLayoutServiceReorderSidebarItemsInGroupProcedure is the fully-qualified name of the
 	// AdminRoomLayoutService's ReorderSidebarItemsInGroup RPC.
 	AdminRoomLayoutServiceReorderSidebarItemsInGroupProcedure = "/chatto.admin.v1.AdminRoomLayoutService/ReorderSidebarItemsInGroup"
+	// AdminRoomLayoutServiceMoveSidebarItemProcedure is the fully-qualified name of the
+	// AdminRoomLayoutService's MoveSidebarItem RPC.
+	AdminRoomLayoutServiceMoveSidebarItemProcedure = "/chatto.admin.v1.AdminRoomLayoutService/MoveSidebarItem"
 	// AdminRoomLayoutServiceCreateSidebarLinkProcedure is the fully-qualified name of the
 	// AdminRoomLayoutService's CreateSidebarLink RPC.
 	AdminRoomLayoutServiceCreateSidebarLinkProcedure = "/chatto.admin.v1.AdminRoomLayoutService/CreateSidebarLink"
@@ -70,24 +82,35 @@ const (
 
 // AdminRoomLayoutServiceClient is a client for the chatto.admin.v1.AdminRoomLayoutService service.
 type AdminRoomLayoutServiceClient interface {
-	// Lists the editable room group layout. Requires role.manage and returns
-	// visible room entries, including archived rooms for administrative actions
-	// such as unarchiving.
+	// Gets management-authorized channel room metadata. Requires role.manage or
+	// effective room.manage for the room.
+	GetRoom(context.Context, *connect.Request[v1.GetRoomRequest]) (*connect.Response[v1.GetRoomResponse], error)
+	// Gets management-authorized room group metadata. Requires role.manage or
+	// effective room.manage for the group.
+	GetRoomGroup(context.Context, *connect.Request[v1.GetRoomGroupRequest]) (*connect.Response[v1.GetRoomGroupResponse], error)
+	// Lists the editable room group layout. Requires server-scope room.manage
+	// and includes archived rooms for administrative actions such as unarchiving.
 	ListRoomGroups(context.Context, *connect.Request[v1.ListRoomGroupsRequest]) (*connect.Response[v1.ListRoomGroupsResponse], error)
-	// Creates a room group. Requires role.manage.
+	// Creates a room group. Requires server-scope room.manage.
 	CreateRoomGroup(context.Context, *connect.Request[v1.CreateRoomGroupRequest]) (*connect.Response[v1.CreateRoomGroupResponse], error)
-	// Updates a room group's metadata. Requires role.manage.
+	// Updates a room group's metadata. Requires effective room.manage for the group.
 	UpdateRoomGroup(context.Context, *connect.Request[v1.UpdateRoomGroupRequest]) (*connect.Response[v1.UpdateRoomGroupResponse], error)
-	// Deletes an empty room group. Requires role.manage.
+	// Deletes an empty room group. Requires effective room.manage for the group.
 	DeleteRoomGroup(context.Context, *connect.Request[v1.DeleteRoomGroupRequest]) (*connect.Response[v1.DeleteRoomGroupResponse], error)
-	// Replaces the global room group order. Requires role.manage.
+	// Replaces the global room group order. Requires server-scope room.manage.
 	ReorderRoomGroups(context.Context, *connect.Request[v1.ReorderRoomGroupsRequest]) (*connect.Response[v1.ReorderRoomGroupsResponse], error)
+	// Moves one room group before another group, or to the end. Requires
+	// server-scope room.manage.
+	MoveRoomGroup(context.Context, *connect.Request[v1.MoveRoomGroupRequest]) (*connect.Response[v1.MoveRoomGroupResponse], error)
 	// Moves a channel room to another room group. Requires room.manage in both
 	// source and destination groups.
 	MoveRoomToGroup(context.Context, *connect.Request[v1.MoveRoomToGroupRequest]) (*connect.Response[v1.MoveRoomToGroupResponse], error)
 	// Replaces the mixed room/link sidebar order in one group. Requires
 	// room.manage in that group.
 	ReorderSidebarItemsInGroup(context.Context, *connect.Request[v1.ReorderSidebarItemsInGroupRequest]) (*connect.Response[v1.ReorderSidebarItemsInGroupResponse], error)
+	// Moves one room or sidebar link to a position in a room group. Requires
+	// room.manage in the source and destination groups.
+	MoveSidebarItem(context.Context, *connect.Request[v1.MoveSidebarItemRequest]) (*connect.Response[v1.MoveSidebarItemResponse], error)
 	// Creates a sidebar link. Requires room.manage in the destination group.
 	CreateSidebarLink(context.Context, *connect.Request[v1.CreateSidebarLinkRequest]) (*connect.Response[v1.CreateSidebarLinkResponse], error)
 	// Updates a sidebar link. Requires room.manage in the link's current group.
@@ -110,6 +133,18 @@ func NewAdminRoomLayoutServiceClient(httpClient connect.HTTPClient, baseURL stri
 	baseURL = strings.TrimRight(baseURL, "/")
 	adminRoomLayoutServiceMethods := v1.File_chatto_admin_v1_room_layout_proto.Services().ByName("AdminRoomLayoutService").Methods()
 	return &adminRoomLayoutServiceClient{
+		getRoom: connect.NewClient[v1.GetRoomRequest, v1.GetRoomResponse](
+			httpClient,
+			baseURL+AdminRoomLayoutServiceGetRoomProcedure,
+			connect.WithSchema(adminRoomLayoutServiceMethods.ByName("GetRoom")),
+			connect.WithClientOptions(opts...),
+		),
+		getRoomGroup: connect.NewClient[v1.GetRoomGroupRequest, v1.GetRoomGroupResponse](
+			httpClient,
+			baseURL+AdminRoomLayoutServiceGetRoomGroupProcedure,
+			connect.WithSchema(adminRoomLayoutServiceMethods.ByName("GetRoomGroup")),
+			connect.WithClientOptions(opts...),
+		),
 		listRoomGroups: connect.NewClient[v1.ListRoomGroupsRequest, v1.ListRoomGroupsResponse](
 			httpClient,
 			baseURL+AdminRoomLayoutServiceListRoomGroupsProcedure,
@@ -140,6 +175,12 @@ func NewAdminRoomLayoutServiceClient(httpClient connect.HTTPClient, baseURL stri
 			connect.WithSchema(adminRoomLayoutServiceMethods.ByName("ReorderRoomGroups")),
 			connect.WithClientOptions(opts...),
 		),
+		moveRoomGroup: connect.NewClient[v1.MoveRoomGroupRequest, v1.MoveRoomGroupResponse](
+			httpClient,
+			baseURL+AdminRoomLayoutServiceMoveRoomGroupProcedure,
+			connect.WithSchema(adminRoomLayoutServiceMethods.ByName("MoveRoomGroup")),
+			connect.WithClientOptions(opts...),
+		),
 		moveRoomToGroup: connect.NewClient[v1.MoveRoomToGroupRequest, v1.MoveRoomToGroupResponse](
 			httpClient,
 			baseURL+AdminRoomLayoutServiceMoveRoomToGroupProcedure,
@@ -150,6 +191,12 @@ func NewAdminRoomLayoutServiceClient(httpClient connect.HTTPClient, baseURL stri
 			httpClient,
 			baseURL+AdminRoomLayoutServiceReorderSidebarItemsInGroupProcedure,
 			connect.WithSchema(adminRoomLayoutServiceMethods.ByName("ReorderSidebarItemsInGroup")),
+			connect.WithClientOptions(opts...),
+		),
+		moveSidebarItem: connect.NewClient[v1.MoveSidebarItemRequest, v1.MoveSidebarItemResponse](
+			httpClient,
+			baseURL+AdminRoomLayoutServiceMoveSidebarItemProcedure,
+			connect.WithSchema(adminRoomLayoutServiceMethods.ByName("MoveSidebarItem")),
 			connect.WithClientOptions(opts...),
 		),
 		createSidebarLink: connect.NewClient[v1.CreateSidebarLinkRequest, v1.CreateSidebarLinkResponse](
@@ -181,17 +228,31 @@ func NewAdminRoomLayoutServiceClient(httpClient connect.HTTPClient, baseURL stri
 
 // adminRoomLayoutServiceClient implements AdminRoomLayoutServiceClient.
 type adminRoomLayoutServiceClient struct {
+	getRoom                    *connect.Client[v1.GetRoomRequest, v1.GetRoomResponse]
+	getRoomGroup               *connect.Client[v1.GetRoomGroupRequest, v1.GetRoomGroupResponse]
 	listRoomGroups             *connect.Client[v1.ListRoomGroupsRequest, v1.ListRoomGroupsResponse]
 	createRoomGroup            *connect.Client[v1.CreateRoomGroupRequest, v1.CreateRoomGroupResponse]
 	updateRoomGroup            *connect.Client[v1.UpdateRoomGroupRequest, v1.UpdateRoomGroupResponse]
 	deleteRoomGroup            *connect.Client[v1.DeleteRoomGroupRequest, v1.DeleteRoomGroupResponse]
 	reorderRoomGroups          *connect.Client[v1.ReorderRoomGroupsRequest, v1.ReorderRoomGroupsResponse]
+	moveRoomGroup              *connect.Client[v1.MoveRoomGroupRequest, v1.MoveRoomGroupResponse]
 	moveRoomToGroup            *connect.Client[v1.MoveRoomToGroupRequest, v1.MoveRoomToGroupResponse]
 	reorderSidebarItemsInGroup *connect.Client[v1.ReorderSidebarItemsInGroupRequest, v1.ReorderSidebarItemsInGroupResponse]
+	moveSidebarItem            *connect.Client[v1.MoveSidebarItemRequest, v1.MoveSidebarItemResponse]
 	createSidebarLink          *connect.Client[v1.CreateSidebarLinkRequest, v1.CreateSidebarLinkResponse]
 	updateSidebarLink          *connect.Client[v1.UpdateSidebarLinkRequest, v1.UpdateSidebarLinkResponse]
 	deleteSidebarLink          *connect.Client[v1.DeleteSidebarLinkRequest, v1.DeleteSidebarLinkResponse]
 	moveSidebarLinkToGroup     *connect.Client[v1.MoveSidebarLinkToGroupRequest, v1.MoveSidebarLinkToGroupResponse]
+}
+
+// GetRoom calls chatto.admin.v1.AdminRoomLayoutService.GetRoom.
+func (c *adminRoomLayoutServiceClient) GetRoom(ctx context.Context, req *connect.Request[v1.GetRoomRequest]) (*connect.Response[v1.GetRoomResponse], error) {
+	return c.getRoom.CallUnary(ctx, req)
+}
+
+// GetRoomGroup calls chatto.admin.v1.AdminRoomLayoutService.GetRoomGroup.
+func (c *adminRoomLayoutServiceClient) GetRoomGroup(ctx context.Context, req *connect.Request[v1.GetRoomGroupRequest]) (*connect.Response[v1.GetRoomGroupResponse], error) {
+	return c.getRoomGroup.CallUnary(ctx, req)
 }
 
 // ListRoomGroups calls chatto.admin.v1.AdminRoomLayoutService.ListRoomGroups.
@@ -219,6 +280,11 @@ func (c *adminRoomLayoutServiceClient) ReorderRoomGroups(ctx context.Context, re
 	return c.reorderRoomGroups.CallUnary(ctx, req)
 }
 
+// MoveRoomGroup calls chatto.admin.v1.AdminRoomLayoutService.MoveRoomGroup.
+func (c *adminRoomLayoutServiceClient) MoveRoomGroup(ctx context.Context, req *connect.Request[v1.MoveRoomGroupRequest]) (*connect.Response[v1.MoveRoomGroupResponse], error) {
+	return c.moveRoomGroup.CallUnary(ctx, req)
+}
+
 // MoveRoomToGroup calls chatto.admin.v1.AdminRoomLayoutService.MoveRoomToGroup.
 func (c *adminRoomLayoutServiceClient) MoveRoomToGroup(ctx context.Context, req *connect.Request[v1.MoveRoomToGroupRequest]) (*connect.Response[v1.MoveRoomToGroupResponse], error) {
 	return c.moveRoomToGroup.CallUnary(ctx, req)
@@ -228,6 +294,11 @@ func (c *adminRoomLayoutServiceClient) MoveRoomToGroup(ctx context.Context, req 
 // chatto.admin.v1.AdminRoomLayoutService.ReorderSidebarItemsInGroup.
 func (c *adminRoomLayoutServiceClient) ReorderSidebarItemsInGroup(ctx context.Context, req *connect.Request[v1.ReorderSidebarItemsInGroupRequest]) (*connect.Response[v1.ReorderSidebarItemsInGroupResponse], error) {
 	return c.reorderSidebarItemsInGroup.CallUnary(ctx, req)
+}
+
+// MoveSidebarItem calls chatto.admin.v1.AdminRoomLayoutService.MoveSidebarItem.
+func (c *adminRoomLayoutServiceClient) MoveSidebarItem(ctx context.Context, req *connect.Request[v1.MoveSidebarItemRequest]) (*connect.Response[v1.MoveSidebarItemResponse], error) {
+	return c.moveSidebarItem.CallUnary(ctx, req)
 }
 
 // CreateSidebarLink calls chatto.admin.v1.AdminRoomLayoutService.CreateSidebarLink.
@@ -253,24 +324,35 @@ func (c *adminRoomLayoutServiceClient) MoveSidebarLinkToGroup(ctx context.Contex
 // AdminRoomLayoutServiceHandler is an implementation of the chatto.admin.v1.AdminRoomLayoutService
 // service.
 type AdminRoomLayoutServiceHandler interface {
-	// Lists the editable room group layout. Requires role.manage and returns
-	// visible room entries, including archived rooms for administrative actions
-	// such as unarchiving.
+	// Gets management-authorized channel room metadata. Requires role.manage or
+	// effective room.manage for the room.
+	GetRoom(context.Context, *connect.Request[v1.GetRoomRequest]) (*connect.Response[v1.GetRoomResponse], error)
+	// Gets management-authorized room group metadata. Requires role.manage or
+	// effective room.manage for the group.
+	GetRoomGroup(context.Context, *connect.Request[v1.GetRoomGroupRequest]) (*connect.Response[v1.GetRoomGroupResponse], error)
+	// Lists the editable room group layout. Requires server-scope room.manage
+	// and includes archived rooms for administrative actions such as unarchiving.
 	ListRoomGroups(context.Context, *connect.Request[v1.ListRoomGroupsRequest]) (*connect.Response[v1.ListRoomGroupsResponse], error)
-	// Creates a room group. Requires role.manage.
+	// Creates a room group. Requires server-scope room.manage.
 	CreateRoomGroup(context.Context, *connect.Request[v1.CreateRoomGroupRequest]) (*connect.Response[v1.CreateRoomGroupResponse], error)
-	// Updates a room group's metadata. Requires role.manage.
+	// Updates a room group's metadata. Requires effective room.manage for the group.
 	UpdateRoomGroup(context.Context, *connect.Request[v1.UpdateRoomGroupRequest]) (*connect.Response[v1.UpdateRoomGroupResponse], error)
-	// Deletes an empty room group. Requires role.manage.
+	// Deletes an empty room group. Requires effective room.manage for the group.
 	DeleteRoomGroup(context.Context, *connect.Request[v1.DeleteRoomGroupRequest]) (*connect.Response[v1.DeleteRoomGroupResponse], error)
-	// Replaces the global room group order. Requires role.manage.
+	// Replaces the global room group order. Requires server-scope room.manage.
 	ReorderRoomGroups(context.Context, *connect.Request[v1.ReorderRoomGroupsRequest]) (*connect.Response[v1.ReorderRoomGroupsResponse], error)
+	// Moves one room group before another group, or to the end. Requires
+	// server-scope room.manage.
+	MoveRoomGroup(context.Context, *connect.Request[v1.MoveRoomGroupRequest]) (*connect.Response[v1.MoveRoomGroupResponse], error)
 	// Moves a channel room to another room group. Requires room.manage in both
 	// source and destination groups.
 	MoveRoomToGroup(context.Context, *connect.Request[v1.MoveRoomToGroupRequest]) (*connect.Response[v1.MoveRoomToGroupResponse], error)
 	// Replaces the mixed room/link sidebar order in one group. Requires
 	// room.manage in that group.
 	ReorderSidebarItemsInGroup(context.Context, *connect.Request[v1.ReorderSidebarItemsInGroupRequest]) (*connect.Response[v1.ReorderSidebarItemsInGroupResponse], error)
+	// Moves one room or sidebar link to a position in a room group. Requires
+	// room.manage in the source and destination groups.
+	MoveSidebarItem(context.Context, *connect.Request[v1.MoveSidebarItemRequest]) (*connect.Response[v1.MoveSidebarItemResponse], error)
 	// Creates a sidebar link. Requires room.manage in the destination group.
 	CreateSidebarLink(context.Context, *connect.Request[v1.CreateSidebarLinkRequest]) (*connect.Response[v1.CreateSidebarLinkResponse], error)
 	// Updates a sidebar link. Requires room.manage in the link's current group.
@@ -289,6 +371,18 @@ type AdminRoomLayoutServiceHandler interface {
 // and JSON codecs. They also support gzip compression.
 func NewAdminRoomLayoutServiceHandler(svc AdminRoomLayoutServiceHandler, opts ...connect.HandlerOption) (string, http.Handler) {
 	adminRoomLayoutServiceMethods := v1.File_chatto_admin_v1_room_layout_proto.Services().ByName("AdminRoomLayoutService").Methods()
+	adminRoomLayoutServiceGetRoomHandler := connect.NewUnaryHandler(
+		AdminRoomLayoutServiceGetRoomProcedure,
+		svc.GetRoom,
+		connect.WithSchema(adminRoomLayoutServiceMethods.ByName("GetRoom")),
+		connect.WithHandlerOptions(opts...),
+	)
+	adminRoomLayoutServiceGetRoomGroupHandler := connect.NewUnaryHandler(
+		AdminRoomLayoutServiceGetRoomGroupProcedure,
+		svc.GetRoomGroup,
+		connect.WithSchema(adminRoomLayoutServiceMethods.ByName("GetRoomGroup")),
+		connect.WithHandlerOptions(opts...),
+	)
 	adminRoomLayoutServiceListRoomGroupsHandler := connect.NewUnaryHandler(
 		AdminRoomLayoutServiceListRoomGroupsProcedure,
 		svc.ListRoomGroups,
@@ -319,6 +413,12 @@ func NewAdminRoomLayoutServiceHandler(svc AdminRoomLayoutServiceHandler, opts ..
 		connect.WithSchema(adminRoomLayoutServiceMethods.ByName("ReorderRoomGroups")),
 		connect.WithHandlerOptions(opts...),
 	)
+	adminRoomLayoutServiceMoveRoomGroupHandler := connect.NewUnaryHandler(
+		AdminRoomLayoutServiceMoveRoomGroupProcedure,
+		svc.MoveRoomGroup,
+		connect.WithSchema(adminRoomLayoutServiceMethods.ByName("MoveRoomGroup")),
+		connect.WithHandlerOptions(opts...),
+	)
 	adminRoomLayoutServiceMoveRoomToGroupHandler := connect.NewUnaryHandler(
 		AdminRoomLayoutServiceMoveRoomToGroupProcedure,
 		svc.MoveRoomToGroup,
@@ -329,6 +429,12 @@ func NewAdminRoomLayoutServiceHandler(svc AdminRoomLayoutServiceHandler, opts ..
 		AdminRoomLayoutServiceReorderSidebarItemsInGroupProcedure,
 		svc.ReorderSidebarItemsInGroup,
 		connect.WithSchema(adminRoomLayoutServiceMethods.ByName("ReorderSidebarItemsInGroup")),
+		connect.WithHandlerOptions(opts...),
+	)
+	adminRoomLayoutServiceMoveSidebarItemHandler := connect.NewUnaryHandler(
+		AdminRoomLayoutServiceMoveSidebarItemProcedure,
+		svc.MoveSidebarItem,
+		connect.WithSchema(adminRoomLayoutServiceMethods.ByName("MoveSidebarItem")),
 		connect.WithHandlerOptions(opts...),
 	)
 	adminRoomLayoutServiceCreateSidebarLinkHandler := connect.NewUnaryHandler(
@@ -357,6 +463,10 @@ func NewAdminRoomLayoutServiceHandler(svc AdminRoomLayoutServiceHandler, opts ..
 	)
 	return "/chatto.admin.v1.AdminRoomLayoutService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case AdminRoomLayoutServiceGetRoomProcedure:
+			adminRoomLayoutServiceGetRoomHandler.ServeHTTP(w, r)
+		case AdminRoomLayoutServiceGetRoomGroupProcedure:
+			adminRoomLayoutServiceGetRoomGroupHandler.ServeHTTP(w, r)
 		case AdminRoomLayoutServiceListRoomGroupsProcedure:
 			adminRoomLayoutServiceListRoomGroupsHandler.ServeHTTP(w, r)
 		case AdminRoomLayoutServiceCreateRoomGroupProcedure:
@@ -367,10 +477,14 @@ func NewAdminRoomLayoutServiceHandler(svc AdminRoomLayoutServiceHandler, opts ..
 			adminRoomLayoutServiceDeleteRoomGroupHandler.ServeHTTP(w, r)
 		case AdminRoomLayoutServiceReorderRoomGroupsProcedure:
 			adminRoomLayoutServiceReorderRoomGroupsHandler.ServeHTTP(w, r)
+		case AdminRoomLayoutServiceMoveRoomGroupProcedure:
+			adminRoomLayoutServiceMoveRoomGroupHandler.ServeHTTP(w, r)
 		case AdminRoomLayoutServiceMoveRoomToGroupProcedure:
 			adminRoomLayoutServiceMoveRoomToGroupHandler.ServeHTTP(w, r)
 		case AdminRoomLayoutServiceReorderSidebarItemsInGroupProcedure:
 			adminRoomLayoutServiceReorderSidebarItemsInGroupHandler.ServeHTTP(w, r)
+		case AdminRoomLayoutServiceMoveSidebarItemProcedure:
+			adminRoomLayoutServiceMoveSidebarItemHandler.ServeHTTP(w, r)
 		case AdminRoomLayoutServiceCreateSidebarLinkProcedure:
 			adminRoomLayoutServiceCreateSidebarLinkHandler.ServeHTTP(w, r)
 		case AdminRoomLayoutServiceUpdateSidebarLinkProcedure:
@@ -387,6 +501,14 @@ func NewAdminRoomLayoutServiceHandler(svc AdminRoomLayoutServiceHandler, opts ..
 
 // UnimplementedAdminRoomLayoutServiceHandler returns CodeUnimplemented from all methods.
 type UnimplementedAdminRoomLayoutServiceHandler struct{}
+
+func (UnimplementedAdminRoomLayoutServiceHandler) GetRoom(context.Context, *connect.Request[v1.GetRoomRequest]) (*connect.Response[v1.GetRoomResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("chatto.admin.v1.AdminRoomLayoutService.GetRoom is not implemented"))
+}
+
+func (UnimplementedAdminRoomLayoutServiceHandler) GetRoomGroup(context.Context, *connect.Request[v1.GetRoomGroupRequest]) (*connect.Response[v1.GetRoomGroupResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("chatto.admin.v1.AdminRoomLayoutService.GetRoomGroup is not implemented"))
+}
 
 func (UnimplementedAdminRoomLayoutServiceHandler) ListRoomGroups(context.Context, *connect.Request[v1.ListRoomGroupsRequest]) (*connect.Response[v1.ListRoomGroupsResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("chatto.admin.v1.AdminRoomLayoutService.ListRoomGroups is not implemented"))
@@ -408,12 +530,20 @@ func (UnimplementedAdminRoomLayoutServiceHandler) ReorderRoomGroups(context.Cont
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("chatto.admin.v1.AdminRoomLayoutService.ReorderRoomGroups is not implemented"))
 }
 
+func (UnimplementedAdminRoomLayoutServiceHandler) MoveRoomGroup(context.Context, *connect.Request[v1.MoveRoomGroupRequest]) (*connect.Response[v1.MoveRoomGroupResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("chatto.admin.v1.AdminRoomLayoutService.MoveRoomGroup is not implemented"))
+}
+
 func (UnimplementedAdminRoomLayoutServiceHandler) MoveRoomToGroup(context.Context, *connect.Request[v1.MoveRoomToGroupRequest]) (*connect.Response[v1.MoveRoomToGroupResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("chatto.admin.v1.AdminRoomLayoutService.MoveRoomToGroup is not implemented"))
 }
 
 func (UnimplementedAdminRoomLayoutServiceHandler) ReorderSidebarItemsInGroup(context.Context, *connect.Request[v1.ReorderSidebarItemsInGroupRequest]) (*connect.Response[v1.ReorderSidebarItemsInGroupResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("chatto.admin.v1.AdminRoomLayoutService.ReorderSidebarItemsInGroup is not implemented"))
+}
+
+func (UnimplementedAdminRoomLayoutServiceHandler) MoveSidebarItem(context.Context, *connect.Request[v1.MoveSidebarItemRequest]) (*connect.Response[v1.MoveSidebarItemResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("chatto.admin.v1.AdminRoomLayoutService.MoveSidebarItem is not implemented"))
 }
 
 func (UnimplementedAdminRoomLayoutServiceHandler) CreateSidebarLink(context.Context, *connect.Request[v1.CreateSidebarLinkRequest]) (*connect.Response[v1.CreateSidebarLinkResponse], error) {

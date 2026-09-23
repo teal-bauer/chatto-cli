@@ -240,7 +240,7 @@ func (s *replState) cmdLeave(args []string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := s.client.LeaveRoom(s.ctx, roomID); err != nil {
+	if err := s.client.LeaveRoom(s.ctx, roomID); err != nil {
 		return leaveRoomErr(err)
 	}
 	fmt.Printf("Left %s\n", args[0])
@@ -370,7 +370,7 @@ func (s *replState) cmdWatch(args []string) error {
 				fmt.Fprintf(os.Stderr, "\nwatch: %v\n", wev.Err)
 				continue
 			}
-			roomID := envelopeRoomID(wev.Event.Envelope)
+			roomID := eventRoomID(wev.Event.Event)
 			if filterRoom != "" && roomID != "" && roomID != filterRoom {
 				continue
 			}
