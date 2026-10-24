@@ -288,14 +288,14 @@ func printStatus(tsRaw, roomName, msg string) {
 	fmt.Printf("%s%s %s\n", dim(tsRaw), roomPart, dim(msg))
 }
 
-// formatTimestamp renders ts as a bracketed "[15:04]" for today or
+// formatTimestamp renders ts in UTC as "[15:04]" for today or
 // "[2006-01-02 15:04]" otherwise.
 func formatTimestamp(ts *timestamppb.Timestamp) string {
 	if ts == nil {
 		return "[]"
 	}
 	t := ts.AsTime()
-	now := time.Now()
+	now := time.Now().UTC()
 	if t.Year() == now.Year() && t.Month() == now.Month() && t.Day() == now.Day() {
 		return "[" + t.Format("15:04") + "]"
 	}

@@ -133,6 +133,21 @@ func TestFormatTimestamp(t *testing.T) {
 	}
 }
 
+func TestFormatTimestampUsesUTCDate(t *testing.T) {
+	original := time.Local
+	t.Cleanup(func() { time.Local = original })
+	offset := 14 * 60 * 60
+	if time.Now().UTC().Hour() < 12 {
+		offset = -12 * 60 * 60
+	}
+	time.Local = time.FixedZone("different-day", offset)
+
+	now := time.Now().UTC()
+	if got, want := formatTimestamp(timestamppb.New(now)), "["+now.Format("15:04")+"]"; got != want {
+		t.Errorf("formatTimestamp(now) = %q, want %q", got, want)
+	}
+}
+
 func TestDisplayName(t *testing.T) {
 	if got := displayName(nil, "u1"); got != "u1" {
 		t.Errorf("displayName(nil) = %q, want %q", got, "u1")
